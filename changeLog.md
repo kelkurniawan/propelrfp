@@ -7,7 +7,8 @@ Format: `[Week N — Phase] Date` → grouped by file, with what changed and why
 
 ## [Week 1 — Foundation Review] 2026-04-30
 
-**Branch:** `main`
+**Commit:** `4962e6d` — `fix: Week 1 review — RLS, auth callback URL, lint, theme tokens`
+**Branch:** `main` → fast-forward merged to `develop`
 **Build status:** `pnpm build`, `pnpm lint`, and `pnpm format:check` all pass clean.
 
 A full review of the initial Week 1 commit found 11 issues. All have been fixed in this revision.
@@ -119,7 +120,9 @@ After all fixes:
 - `src/lib/stripe/webhooks.ts` — Prettier reformat
 - `eslint.config.mjs` — added `eslint-config-prettier`, ignore `supabase/migrations`
 - `package.json` — added `format`, `format:check`, `typecheck` scripts; added `zod`
-- All other source files — Prettier reformat
+- `components.json` — Prettier reformat (multi-line shadcn config)
+- `pnpm-lock.yaml` — regenerated after adding `zod`
+- All other source files — Prettier reformat (consistent style: 100-char width, 2-space indent, semicolons, LF endings)
 
 ### Files Moved in This Revision
 
