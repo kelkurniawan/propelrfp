@@ -1,65 +1,49 @@
-import Image from "next/image";
+import Link from "next/link";
 
-export default function Home() {
+export default function LandingPage() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="flex min-h-screen flex-col items-center justify-center gap-6 p-8 bg-[#F7F9FB]">
+      <div className="text-center">
+        <div className="inline-flex items-center gap-2.5 mb-6">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center font-bold text-white text-lg" style={{ background: "linear-gradient(135deg, #162B44, #2E75B6)" }}>
+            P
+          </div>
+          <span className="text-2xl font-bold tracking-tight" style={{ color: "#162B44" }}>PropelRFP</span>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+        <h1 className="text-5xl font-extrabold tracking-tight leading-tight" style={{ color: "#162B44" }}>
+          Win more contracts,<br />faster.
+        </h1>
+        <p className="mt-4 text-lg text-gray-500 max-w-md mx-auto leading-relaxed">
+          AI-powered proposal automation grounded in your company&apos;s own winning history.
+          Stop rewriting — start winning.
+        </p>
+      </div>
+      <div className="flex gap-3 mt-2">
+        <Link
+          href="/signup"
+          className="rounded-lg px-6 py-3 text-sm font-semibold text-white shadow-sm"
+          style={{ background: "#162B44" }}
+        >
+          Start free trial
+        </Link>
+        <Link
+          href="/login"
+          className="rounded-lg border border-gray-200 bg-white px-6 py-3 text-sm font-semibold text-gray-700 shadow-sm"
+        >
+          Sign in
+        </Link>
+      </div>
+      <p className="text-xs text-gray-400">
+        14-day free trial · No credit card required · Starting at $299/mo
+      </p>
+      <div className="flex gap-10 mt-4">
+        {[["60%", "Faster"], ["40%", "Accept rate"], ["10x", "ROI"]].map(([n, l]) => (
+          <div key={l} className="text-center">
+            <div className="text-2xl font-extrabold" style={{ color: "#162B44" }}>{n}</div>
+            <div className="text-xs text-gray-400 uppercase tracking-wider mt-0.5">{l}</div>
+          </div>
+        ))}
+      </div>
+    </main>
   );
 }
