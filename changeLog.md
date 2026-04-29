@@ -5,6 +5,132 @@ Format: `[Week N — Phase] Date` → grouped by file, with what changed and why
 
 ---
 
+## [Week 1 — Foundation Review] 2026-04-30
+
+**Branch:** `main`
+**Build status:** `pnpm build`, `pnpm lint`, and `pnpm format:check` all pass clean.
+
+A full review of the initial Week 1 commit found 11 issues. All have been fixed in this revision.
+
+### Bugs Fixed
+
+#### 1. Auth callback URL was wrong
+- **Was:** `src/app/(auth)/callback/route.ts` resolves to URL `/callback`.
+- **Now:** Moved to `src/app/auth/callback/route.ts` (outside the route group), URL is `/auth/callback`.
+- **Why:** The `(auth)` route group does not contribute to the URL path. The proxy allowlist expected `/auth/*` and Supabase OAuth conventions use `/auth/callback`. As written, OAuth signin would have failed because the callback URL would not match the proxy's public-path check.
+
+#### 2. RLS policies blocked signup entirely
+- **Was:** `organizations` had no INSERT policy → impossible to create an org. `users` had only one policy referencing `users` itself → impossible for a brand-new user to insert their own row (subquery returns NULL).
+- **Now:** Granular policies on each table:
+  - `organizations`: `auth_users_insert_org` (any authenticated user can create), `org_members_read`, `org_owner_update`.
+  - `users`: `user_self_insert` (only `id = auth.uid()`), `users_org_read`, `users_self_or_admin_update`, `owner_delete_users`.
+  - `subscriptions`: read-only for org members. INSERT/UPDATE only via service role (Stripe webhook handler).
+  - `gen_logs`: explicit `gen_logs_org_insert` policy. UPDATE/DELETE remain denied (append-only audit).
+- **Why:** Originally the schema would have been technically syntactically valid but operationally broken — Week 2 signup would fail on the first INSERT.
+
+#### 3. ESLint failed with 4 errors on database.ts
+- **Was:** `Views: {}; Functions: {}; Enums: {}; CompositeTypes: {};` — empty object types violate `@typescript-eslint/no-empty-object-type`.
+- **Now:** `Record<never, never>` for each, which carries the same type meaning (a structurally empty object) without the lint warning.
+- **Why:** `pnpm lint` is required by the project conventions (CLAUDE.md) and was failing.
+
+#### 4. Tailwind theme missed 17 of the 19 shadcn color variables
+- **Was:** Only `--color-background` and `--color-foreground` were exposed via `@theme`. Utility classes like `bg-card`, `border-border`, `text-muted-foreground`, `bg-primary`, etc. would silently render unstyled because the underlying `--color-*` variables didn't exist.
+- **Now:** All 19 shadcn color tokens (card, popover, primary, secondary, muted, accent, destructive, border, input, ring) plus `--radius` are wired into `@theme inline` using `hsl(var(--token))`.
+- **Why:** Without this, every shadcn/ui component added in later weeks would render incorrectly and the bug would only surface visually — easy to miss until the editor is built.
+
+### Architectural Improvements
+
+#### 5. Extracted `src/lib/supabase/middleware.ts` helper
+- **Was:** All cookie/session logic lived inline in `src/proxy.ts`.
+- **Now:** Logic moved to `src/lib/supabase/middleware.ts` exporting `updateSession(request)`. The `proxy.ts` is a thin shim that calls it.
+- **Why:** Matches the folder structure specified in the Dev Setup Checklist Section 10. Makes the helper independently testable and matches the canonical Supabase + Next.js auth pattern.
+
+#### 6. Proxy now gracefully handles missing env vars
+- **Was:** Proxy crashed with `TypeError: Invalid URL` if `.env.local` did not exist (would block dev server startup before Supabase setup is complete).
+- **Now:** Helper checks for `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY`; returns the unmodified `NextResponse.next()` if either is missing.
+- **Why:** Allows the user to run `pnpm dev` and view the landing page before completing Supabase setup. Auth checks resume automatically once env vars are present.
+
+#### 7. Added 9 database indexes for hot query paths
+- `users(org_id)` and `users(email)` — speeds up the `current_org_id()` RLS subquery used on every authenticated query, and email lookups for invites.
+- `subscriptions(stripe_customer_id)` — for webhook lookup.
+- `knowledge_docs(org_id)`, `knowledge_docs(status) WHERE status IN ('queued', 'processing')` — partial index for the cron job that picks up pending docs.
+- `doc_chunks(org_id)` and `doc_chunks(doc_id)` — for delete cascade and per-doc queries.
+- `rfp_projects(org_id)` and composite `(org_id, status, deadline)` — for the dashboard list/sort/filter.
+- `rfp_sections(project_id, position)` — for ordered editor rendering.
+- `gen_logs(org_id, created_at DESC)` and `gen_logs(section_id)` — for monthly counter queries and per-section audit lookups.
+- **Why:** The IVFFlat index alone won't carry production load; ordinary B-tree indexes on RLS subquery columns and dashboard filters prevent quadratic behavior as data grows.
+
+#### 8. Added `current_org_id()` SQL helper function
+- A `STABLE` function caches the `auth.uid() → org_id` lookup within a single statement.
+- All RLS policies now call `current_org_id()` instead of inline subqueries.
+- **Why:** On hot paths like the `doc_chunks` vector search, the original RLS policy ran the same subquery for every row. With a `STABLE` function, Postgres caches the result per statement.
+
+### Conventions Added
+
+#### 9. New file: `src/lib/api.ts`
+- Exports `ok(data)`, `fail(code, message, status)`, and `ApiErrors` (Unauthorized / Forbidden / NotFound / ValidationFailed / LimitReached / InternalError).
+- All future API routes use these helpers instead of hand-rolling `NextResponse.json({ data, error })` envelopes.
+- **Why:** CLAUDE.md mandates the `{ data, error }` envelope. Centralizing it prevents drift across 20+ route handlers.
+
+#### 10. Added `zod` dependency (^4.3.6)
+- **Why:** CLAUDE.md mandates "Use Zod for request body validation in API routes." It was missing from the original installs. Pulling it in now means Week 2 routes can use it on day one.
+
+#### 11. Prettier config + scripts
+- New file `.prettierrc.json` — 100-char width, 2-space indent, semicolons, trailing commas (es5), LF endings.
+- New file `.prettierignore` — excludes lockfile, build output, markdown, public assets.
+- ESLint config now imports `eslint-config-prettier` to disable conflicting rules.
+- New `package.json` scripts:
+  - `pnpm format` — write Prettier formatting to all files.
+  - `pnpm format:check` — CI-friendly check without writing.
+  - `pnpm typecheck` — `tsc --noEmit` for fast type-only verification.
+- **Why:** `eslint-config-prettier` and `prettier` were installed in the initial commit but never wired up.
+
+### Files Replaced
+
+#### 12. `README.md` rewritten
+- **Was:** Default Next.js boilerplate ("This is a Next.js project bootstrapped with create-next-app").
+- **Now:** Project-specific README covering the stack, getting started, scripts, architecture, project layout, branching strategy, and the 8-week roadmap.
+
+### Verification
+
+After all fixes:
+
+| Check | Result |
+|---|---|
+| `pnpm lint` | passes, 0 warnings |
+| `pnpm build` | passes, TypeScript strict OK |
+| `pnpm format:check` | passes, all files formatted |
+| Routes generated | `/`, `/login`, `/signup`, `/auth/callback`, `/dashboard` |
+
+### Files Added in This Revision
+
+- `src/lib/supabase/middleware.ts`
+- `src/lib/api.ts`
+- `.prettierrc.json`
+- `.prettierignore`
+- `README.md` (replaced)
+
+### Files Modified in This Revision
+
+- `supabase/migrations/001_initial_schema.sql` — RLS rewrite, indexes, `current_org_id()` helper
+- `src/types/database.ts` — `{}` → `Record<never, never>`, plus Prettier reformat
+- `src/app/globals.css` — added 17 missing `@theme` color tokens
+- `src/proxy.ts` — reduced to thin shim around `updateSession`
+- `src/lib/stripe/webhooks.ts` — Prettier reformat
+- `eslint.config.mjs` — added `eslint-config-prettier`, ignore `supabase/migrations`
+- `package.json` — added `format`, `format:check`, `typecheck` scripts; added `zod`
+- All other source files — Prettier reformat
+
+### Files Moved in This Revision
+
+- `src/app/(auth)/callback/route.ts` → `src/app/auth/callback/route.ts`
+
+### Files Deleted in This Revision
+
+- `README.md` (original Next.js boilerplate, replaced)
+
+---
+
 ## [Week 1 — Foundation] 2026-04-30
 
 **Commit:** `4975431` — `feat: Week 1 foundation — scaffold, schema, and all lib stubs`

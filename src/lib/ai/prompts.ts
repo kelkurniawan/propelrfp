@@ -25,9 +25,7 @@ Respond with only the proposal text — no meta-commentary, no headings.`;
       ? `<reference_material>\n${kbChunks.map((c, i) => `[${i + 1}] ${c}`).join("\n\n")}\n</reference_material>`
       : "<reference_material>No reference material available.</reference_material>";
 
-  const instruction = customInstruction
-    ? `\n\nAdditional instruction: ${customInstruction}`
-    : "";
+  const instruction = customInstruction ? `\n\nAdditional instruction: ${customInstruction}` : "";
 
   const user = `${referenceBlock}
 

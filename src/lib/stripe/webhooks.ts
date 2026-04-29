@@ -14,16 +14,10 @@ export async function verifyWebhookSignature(
   body: string,
   signature: string
 ): Promise<Stripe.Event> {
-  return stripe.webhooks.constructEvent(
-    body,
-    signature,
-    process.env.STRIPE_WEBHOOK_SECRET!
-  );
+  return stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET!);
 }
 
-export async function handleSubscriptionUpsert(
-  subscription: Stripe.Subscription
-) {
+export async function handleSubscriptionUpsert(subscription: Stripe.Subscription) {
   const orgId = subscription.metadata?.org_id;
   if (!orgId) return;
 
@@ -52,16 +46,11 @@ export async function handleSubscriptionUpsert(
   );
 }
 
-export async function handleSubscriptionDeleted(
-  subscription: Stripe.Subscription
-) {
+export async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   const orgId = subscription.metadata?.org_id;
   if (!orgId) return;
 
   const supabase = getAdminClient();
 
-  await supabase
-    .from("subscriptions")
-    .update({ status: "canceled" })
-    .eq("org_id", orgId);
+  await supabase.from("subscriptions").update({ status: "canceled" }).eq("org_id", orgId);
 }

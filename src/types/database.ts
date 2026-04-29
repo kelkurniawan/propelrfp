@@ -56,7 +56,12 @@ export interface Database {
           created_at?: string;
         };
         Relationships: [
-          { foreignKeyName: "users_org_id_fkey"; columns: ["org_id"]; referencedRelation: "organizations"; referencedColumns: ["id"] }
+          {
+            foreignKeyName: "users_org_id_fkey";
+            columns: ["org_id"];
+            referencedRelation: "organizations";
+            referencedColumns: ["id"];
+          },
         ];
       };
       subscriptions: {
@@ -97,7 +102,12 @@ export interface Database {
           created_at?: string;
         };
         Relationships: [
-          { foreignKeyName: "subscriptions_org_id_fkey"; columns: ["org_id"]; referencedRelation: "organizations"; referencedColumns: ["id"] }
+          {
+            foreignKeyName: "subscriptions_org_id_fkey";
+            columns: ["org_id"];
+            referencedRelation: "organizations";
+            referencedColumns: ["id"];
+          },
         ];
       };
       knowledge_docs: {
@@ -135,7 +145,12 @@ export interface Database {
           created_at?: string;
         };
         Relationships: [
-          { foreignKeyName: "knowledge_docs_org_id_fkey"; columns: ["org_id"]; referencedRelation: "organizations"; referencedColumns: ["id"] }
+          {
+            foreignKeyName: "knowledge_docs_org_id_fkey";
+            columns: ["org_id"];
+            referencedRelation: "organizations";
+            referencedColumns: ["id"];
+          },
         ];
       };
       doc_chunks: {
@@ -170,7 +185,12 @@ export interface Database {
           created_at?: string;
         };
         Relationships: [
-          { foreignKeyName: "doc_chunks_doc_id_fkey"; columns: ["doc_id"]; referencedRelation: "knowledge_docs"; referencedColumns: ["id"] }
+          {
+            foreignKeyName: "doc_chunks_doc_id_fkey";
+            columns: ["doc_id"];
+            referencedRelation: "knowledge_docs";
+            referencedColumns: ["id"];
+          },
         ];
       };
       rfp_projects: {
@@ -208,7 +228,12 @@ export interface Database {
           updated_at?: string;
         };
         Relationships: [
-          { foreignKeyName: "rfp_projects_org_id_fkey"; columns: ["org_id"]; referencedRelation: "organizations"; referencedColumns: ["id"] }
+          {
+            foreignKeyName: "rfp_projects_org_id_fkey";
+            columns: ["org_id"];
+            referencedRelation: "organizations";
+            referencedColumns: ["id"];
+          },
         ];
       };
       rfp_sections: {
@@ -249,7 +274,12 @@ export interface Database {
           updated_at?: string;
         };
         Relationships: [
-          { foreignKeyName: "rfp_sections_project_id_fkey"; columns: ["project_id"]; referencedRelation: "rfp_projects"; referencedColumns: ["id"] }
+          {
+            foreignKeyName: "rfp_sections_project_id_fkey";
+            columns: ["project_id"];
+            referencedRelation: "rfp_projects";
+            referencedColumns: ["id"];
+          },
         ];
       };
       gen_logs: {
@@ -287,13 +317,18 @@ export interface Database {
           created_at?: string;
         };
         Relationships: [
-          { foreignKeyName: "gen_logs_section_id_fkey"; columns: ["section_id"]; referencedRelation: "rfp_sections"; referencedColumns: ["id"] }
+          {
+            foreignKeyName: "gen_logs_section_id_fkey";
+            columns: ["section_id"];
+            referencedRelation: "rfp_sections";
+            referencedColumns: ["id"];
+          },
         ];
       };
     };
-    Views: {};
-    Functions: {};
-    Enums: {};
-    CompositeTypes: {};
+    Views: Record<never, never>;
+    Functions: Record<never, never>;
+    Enums: Record<never, never>;
+    CompositeTypes: Record<never, never>;
   };
 }

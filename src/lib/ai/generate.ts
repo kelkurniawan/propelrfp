@@ -45,10 +45,7 @@ export async function generateSectionStream({
       return new ReadableStream<Uint8Array>({
         async start(controller) {
           for await (const event of stream) {
-            if (
-              event.type === "content_block_delta" &&
-              event.delta.type === "text_delta"
-            ) {
+            if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
               controller.enqueue(encoder.encode(event.delta.text));
             }
           }
@@ -73,9 +70,7 @@ export async function detectSections(
   const response = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 4096,
-    messages: [
-      { role: "user", content: buildSectionDetectionPrompt(rfpText) },
-    ],
+    messages: [{ role: "user", content: buildSectionDetectionPrompt(rfpText) }],
   });
 
   const text = response.content[0].type === "text" ? response.content[0].text : "";
