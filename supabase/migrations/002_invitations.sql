@@ -44,6 +44,3 @@ create policy "invitations_admin_update" on invitations
     )
   );
 
--- Public read by token (unguessable). Accept logic gates DB writes server-side.
-create policy "invitations_token_lookup" on invitations
-  for select using (true);
