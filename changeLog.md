@@ -10,164 +10,594 @@ Format: `[Week N — Phase] Date` → grouped by file, with what changed and why
 **Branch:** `feature/auth-and-org` → PR into `develop`
 **Build status:** `pnpm typecheck` and `pnpm build` both pass clean. 17 routes compiled successfully.
 
+**Commits (oldest → newest):**
+
+| SHA | Message |
+|---|---|
+| `67a7c6d` | `feat(db): add invitations table for team invite flow` |
+| `44409d6` | `fix(db): remove overly permissive invitations token lookup policy` |
+| `cc2d755` | `feat(types): add Invitation table to database type` |
+| `7ce1f12` | `feat(ui): install react-hook-form and shadcn primitives` |
+| `041ac6d` | `feat(schemas): add org and invite Zod schemas` |
+| `6122855` | `feat(schemas): add auth Zod schemas` |
+| `3ef5f96` | `feat(auth): add requireRole and withErrorHandling helpers` |
+| `f8c7115` | `feat(ui): auth shared components (card, google, field)` |
+| `ea68698` | `feat(auth): real login page with email/pass + Google` |
+| `228364e` | `feat(auth): signup wizard step 1 (account)` |
+| `7197723` | `feat(auth): signup wizard step 2 (org details)` |
+| `4f188ef` | `feat(api): /api/auth/signup handles account + org creation` |
+| `0f7647b` | `feat(auth): forgot password page` |
+| `ffb81c2` | `feat(auth): reset password page` |
+| `ed8d016` | `fix(auth): Suspense boundary for useSearchParams + Supabase client placeholder for build` |
+| `96d20d5` | `feat(proxy): handle evicted users and orphan signup recovery` |
+| `2ece9c2` | `feat(settings): tab nav layout` |
+| `6973106` | `feat(settings): org details page with form and danger zone` |
+| `757fcea` | `feat(api): /api/org PATCH and DELETE for owner` |
+| `43bfc03` | `feat(email): invite template and Resend wrapper` |
+| `7aa6f23` | `feat(api): POST/DELETE /api/org/invitations` |
+| `2af302f` | `feat(api): POST /api/org/invitations/[token] accept flow` |
+| `7a87aab` | `feat(auth): /invite/[token] landing page + signout endpoint` |
+| `17a7e35` | `feat(settings): members page with invite form and table` |
+| `e3a854c` | `feat(api): /api/org/members/[userId] role/transfer/remove` |
+| `65e95ac` | `feat(dashboard): Week 2 placeholder with settings CTAs` |
+| `4fb9070` | `docs(changelog): record Week 2 — Auth & Org module` |
+
+---
+
 ### Overview
 
-Week 2 delivered the complete Auth & Org module: real login/signup flows (email + Google OAuth), org creation wizard, team invite system, org and member settings pages, role-based access control, and eviction/orphan recovery in the proxy.
+Week 2 delivered the complete Auth & Org module: real login/signup flows (email + Google OAuth), org creation wizard, team invite system, org and member settings pages, role-based access control, and eviction/orphan recovery in the proxy. All 27 tasks from the implementation plan were completed. The implementation plan lives at `docs/superpowers/plans/2026-04-30-week2-auth-org.md` and the design spec at `docs/superpowers/specs/2026-04-30-week2-auth-org-design.md`.
 
 ---
 
 ### New Migration
 
 #### `supabase/migrations/002_invitations.sql`
-- Creates the `invitations` table: `id`, `org_id`, `email`, `role` (admin/member), `token` (unique 24-byte base64url), `status` (pending/accepted/revoked/expired), `invited_by`, `expires_at` (7 days), `created_at`.
-- Unique constraint `unique(org_id, email)` prevents duplicate pending invites per org.
-- Three RLS policies: `invitations_org_read` (members read own org's invites), `invitations_admin_insert` (admins/owners create), `invitations_admin_update` (admins/owners revoke).
-- **Security note:** No `invitations_token_lookup` policy was added. An earlier draft included `for select using (true)` which would have made all invitation tokens publicly readable. Removed before commit. Token lookups use `createServiceClient()` server-side (service role bypasses RLS safely).
+
+Full DDL as committed:
+
+```sql
+create table invitations (
+  id          uuid primary key default gen_random_uuid(),
+  org_id      uuid not null references organizations(id) on delete cascade,
+  email       text not null,
+  role        text not null default 'member'
+                check (role in ('admin', 'member')),
+  token       text not null unique default encode(gen_random_bytes(24), 'base64url'),
+  invited_by  uuid not null references users(id) on delete cascade,
+  status      text not null default 'pending'
+                check (status in ('pending', 'accepted', 'revoked', 'expired')),
+  expires_at  timestamptz not null default (now() + interval '7 days'),
+  created_at  timestamptz not null default now(),
+  accepted_at timestamptz,
+  unique (org_id, email)
+);
+
+create index invitations_org_id_idx       on invitations(org_id);
+create index invitations_token_idx        on invitations(token);
+create index invitations_email_status_idx on invitations(email, status);
+```
+
+RLS enabled. Three policies:
+- `invitations_org_read` — members SELECT their org's invitations.
+- `invitations_admin_insert` — owners/admins INSERT (with `with check` verifying `org_id = current_org_id()` and caller role).
+- `invitations_admin_update` — owners/admins UPDATE (for revoke/resend).
+
+**Security fix applied in commit `44409d6`:** The initial draft (`67a7c6d`) included a fourth policy `invitations_token_lookup for select using (true)`. This would have made the entire invitations table (all email addresses and tokens) publicly readable without authentication. The code quality review caught it. The policy was removed in the next commit. All server-side token lookups now use `createServiceClient()` (service role), which bypasses RLS safely and the service key is never exposed client-side.
 
 ---
 
-### New Dependencies
+### New Dependencies Added in Week 2
 
-| Package | Purpose |
+| Package | Installed version | Purpose |
+|---|---|---|
+| `react-hook-form` | `^7.74.0` | Controlled form state and submission |
+| `@hookform/resolvers` | `^5.2.2` | Zod resolver bridge for react-hook-form |
+| `sonner` | `^2.0.7` | Toast notifications (`<Toaster richColors />` in root layout) |
+| `@radix-ui/react-dialog` | `^1.1.15` | Radix primitive for shadcn/ui `dialog` |
+| `@radix-ui/react-dropdown-menu` | `^2.1.16` | Radix primitive for shadcn/ui `dropdown-menu` |
+| `@radix-ui/react-label` | `^2.1.8` | Radix primitive for shadcn/ui `label` |
+| `@radix-ui/react-select` | `^2.2.6` | Radix primitive for shadcn/ui `select` |
+| `@radix-ui/react-slot` | `^1.2.4` | Radix primitive for shadcn/ui `button` |
+| `next-themes` | `^0.4.6` | shadcn/ui peer dependency (installed, not yet used) |
+
+shadcn/ui components added via `pnpm dlx shadcn@latest add`:
+
+| Component | Output file |
 |---|---|
-| `react-hook-form` ^7.x | Controlled form state with Zod resolver |
-| `@hookform/resolvers` ^5.x | Bridge between react-hook-form and Zod |
-| `resend` | Transactional email for invite links |
-| `@react-email/components` | React email template primitives |
-
-#### shadcn/ui components added (via `pnpm dlx shadcn@latest add`)
-`button`, `input`, `label`, `card`, `dialog`, `table`, `dropdown-menu`, `select`, `alert`, `sonner`
+| `button` | `src/components/ui/button.tsx` |
+| `input` | `src/components/ui/input.tsx` |
+| `label` | `src/components/ui/label.tsx` |
+| `card` | `src/components/ui/card.tsx` |
+| `dialog` | `src/components/ui/dialog.tsx` |
+| `table` | `src/components/ui/table.tsx` |
+| `dropdown-menu` | `src/components/ui/dropdown-menu.tsx` |
+| `select` | `src/components/ui/select.tsx` |
+| `alert` | `src/components/ui/alert.tsx` |
+| `sonner` | `src/components/ui/sonner.tsx` |
 
 ---
 
-### New Files — Schemas & Auth Utilities
+### New Files — Zod Schemas
 
 #### `src/lib/schemas/auth.ts`
-Zod schemas: `loginSchema`, `signupAccountSchema`, `forgotSchema`, `resetSchema`, `signupBodySchema` (discriminated union on `action: "create-account" | "create-org"`).
+
+```ts
+export const loginSchema = z.object({
+  email: z.string().email("Invalid email"),
+  password: z.string().min(1, "Password is required"),
+});
+
+export const signupAccountSchema = z.object({
+  full_name: z.string().min(1, "Name is required").max(100),
+  email: z.string().email("Invalid email"),
+  password: z.string().min(8, "Password must be at least 8 characters").max(72),
+});
+
+export const forgotSchema = z.object({ email: z.string().email("Invalid email") });
+
+export const resetSchema = z
+  .object({ password: z.string().min(8).max(72), confirm: z.string() })
+  .refine((d) => d.password === d.confirm, {
+    message: "Passwords do not match",
+    path: ["confirm"],
+  });
+
+// Discriminated union used by /api/auth/signup to handle both wizard steps
+export const signupBodySchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("create-account"), ...signupAccountSchema.shape }),
+  z.object({ action: z.literal("create-org"), name: z.string().min(1).max(100), industry: z.string().min(1) }),
+]);
+```
 
 #### `src/lib/schemas/org.ts`
-Zod schemas: `orgUpdateSchema`, `inviteCreateSchema`, `memberRoleSchema`, `memberActionSchema`.
 
-#### `src/lib/auth/requireRole.ts`
-- `ApiError` class: `code`, `message`, `status` fields. Thrown by route guards.
-- `requireRole(allowed: UserRole[])`: validates session, fetches `users` row, checks role membership. Returns `{ userId, orgId, role, supabase }`. Throws `ApiError` on any failure.
+```ts
+export const orgUpdateSchema = z.object({
+  name: z.string().min(1, "Name is required").max(100),
+  industry: z.enum(INDUSTRIES as readonly [string, ...string[]]),
+  website: z.string().url("Must be a valid URL").optional().or(z.literal("").transform(() => undefined)),
+  size: z.enum(["1-10", "11-50", "51-200", "201-1000", "1000+"]).optional(),
+});
 
-#### `src/lib/api.ts` (extended)
-- `withErrorHandling(handler)`: route wrapper catching `ZodError → 400`, `ApiError → status`, else `→ 500`.
+export const inviteCreateSchema = z.object({
+  email: z.string().email("Invalid email"),
+  role: z.enum(["admin", "member"]),
+});
+
+export const memberRoleSchema = z.object({ role: z.enum(["admin", "member"]) });
+
+export const memberActionSchema = z.object({ action: z.literal("transfer-ownership") });
+```
 
 ---
 
-### New Files — Auth Pages & Components
+### New Files — Auth Utilities
+
+#### `src/lib/auth/requireRole.ts`
+
+```ts
+export class ApiError extends Error {
+  code: string;
+  status: number;
+  constructor(code: string, message: string, status: number) {
+    super(message);
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export async function requireRole(allowed: UserRole[]) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new ApiError("unauthorized", "Authentication required", 401);
+
+  const { data: row, error } = await supabase
+    .from("users").select("id, org_id, role").eq("id", user.id).single();
+
+  if (error || !row) throw new ApiError("forbidden", "Not a member of any organization", 403);
+  if (!allowed.includes(row.role as UserRole))
+    throw new ApiError("forbidden", `Requires role: ${allowed.join(" or ")}`, 403);
+
+  return { userId: row.id, orgId: row.org_id, role: row.role as UserRole, supabase };
+}
+```
+
+Used by every authenticated API route. Returns a structured context object so routes don't need to repeat session/role logic.
+
+#### `src/lib/api.ts` — extended from Week 1
+
+`withErrorHandling()` added to the existing `ok`, `fail`, `ApiErrors` exports:
+
+```ts
+export function withErrorHandling(handler) {
+  return async (req, ctx): Promise<NextResponse> => {
+    try {
+      return await handler(req, ctx);
+    } catch (err) {
+      if (err instanceof ZodError) {
+        return fail("validation_failed", err.issues.map((i) => i.message).join(", "), 400);
+      }
+      if (err instanceof ApiError) return fail(err.code, err.message, err.status);
+      console.error("[api] unhandled error", err);
+      return ApiErrors.InternalError();
+    }
+  };
+}
+```
+
+Every route handler is now wrapped: `export const POST = withErrorHandling(async (req) => { ... })`. Zod parse errors from `schema.parse(await req.json())` are caught automatically and returned as `{ data: null, error: { code: "validation_failed", message: "..." } }` without extra try/catch boilerplate in each route.
+
+---
+
+### New Files — Auth Shared UI Components
 
 #### `src/components/auth/AuthCard.tsx`
-Branded card wrapper for all auth pages. Renders PropelRFP logo mark, white card container, and a footer slot.
+
+Branded card wrapper used by every auth page. Props: `title`, `subtitle?`, `children`, `footer?`. Renders:
+- PropelRFP logo: gradient square (`linear-gradient(135deg, #162B44, #2E75B6)`) with "P" lettermark + wordmark in navy.
+- White rounded card (`rounded-xl border border-gray-200 bg-white p-8 shadow-sm`).
+- Optional footer below the card for secondary links ("Already have an account?", "Back to sign in", etc.).
+- Background: `bg-[#F7F9FB]` (light grey, full-screen).
 
 #### `src/components/auth/GoogleButton.tsx`
-Client component. Calls `supabase.auth.signInWithOAuth({ provider: "google" })` with `redirectTo: /auth/callback?next=<next>`.
+
+Client component (`"use client"`). Single prop `next?: string` (defaults to `"/signup/org"`). On click: calls `supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin + /auth/callback?next=<encoded-next> } })`. Renders as a full-width outline Button.
 
 #### `src/components/auth/FormField.tsx`
-Accessible label + children + error message wrapper used by all auth forms.
 
-#### `src/app/(auth)/login/page.tsx`
-Real login page replacing the Week 1 placeholder. Email/password form with react-hook-form + Zod, Google OAuth button, "Forgot password?" link. Includes `RemovedBanner` component (reads `?error=removed` query param) extracted into a `<Suspense>` boundary to satisfy Next.js `useSearchParams()` requirements.
+Accessibility wrapper. Props: `label`, `htmlFor`, `error?`, `children`. Renders `<Label htmlFor>` + children + optional `<p className="text-xs text-destructive">` error line. Used by all forms (login, signup, org, invite, members).
 
-#### `src/app/(auth)/signup/page.tsx`
-Wizard step 1: name, email, password. POSTs `{ action: "create-account", ... }` to `/api/auth/signup`.
+---
 
-#### `src/app/(auth)/signup/org/page.tsx`
-Wizard step 2: org name + industry (Select from `INDUSTRIES`). POSTs `{ action: "create-org", ... }` to `/api/auth/signup`. Prefills org name from Google user metadata on OAuth signups.
+### New Files — Auth Pages
 
-#### `src/app/(auth)/forgot/page.tsx`
-Password reset request form. Calls `supabase.auth.resetPasswordForEmail()`.
+#### `src/app/(auth)/login/page.tsx` (replaced Week 1 placeholder)
 
-#### `src/app/(auth)/reset/page.tsx`
-New-password form. Calls `supabase.auth.updateUser({ password })`. Validates password confirmation match via Zod `refine`.
+Two sub-components:
 
-#### `src/app/api/auth/signout/route.ts`
-POST: calls `supabase.auth.signOut()` then redirects to `/login`.
+**`RemovedBanner`**: calls `useSearchParams()` to read `?error=removed`. Renders amber alert box if present, null otherwise. Wrapped in `<Suspense>` inside `LoginForm` to satisfy Next.js static rendering requirements (see Bugs Fixed §2).
+
+**`LoginForm`** (client component):
+- `useForm` with `loginSchema`.
+- On submit: `supabase.auth.signInWithPassword({ email, password })`. On error: `toast.error(error.message)`. On success: `router.replace("/dashboard")` + `router.refresh()`.
+- Renders email Input, password Input, "Forgot password?" link, Sign in Button, divider, `<GoogleButton next="/dashboard" />`.
+
+**`LoginPage`** (default export, server-compatible): wraps `LoginForm` in `AuthCard` with title "Welcome back" and sign-up footer link.
+
+#### `src/app/(auth)/signup/page.tsx` (replaced Week 1 placeholder)
+
+Wizard step 1. Client component. `useForm` with `signupAccountSchema`. On submit: `POST /api/auth/signup` with `{ action: "create-account", full_name, email, password }`. On success: `router.replace("/signup/org")`. Renders: full name, email, password fields + "Continue" button + Google OAuth button (which redirects directly to `/signup/org` after OAuth). Footer: "Already have an account? Sign in".
+
+#### `src/app/(auth)/signup/org/page.tsx` (new)
+
+Wizard step 2. Client component. Local `orgStepSchema` (name + industry enum). On mount: `supabase.auth.getUser()` to prefill org name from `user.user_metadata.full_name` → `"<FirstName>'s Workspace"` (handles Google and email signup). On submit: `POST /api/auth/signup` with `{ action: "create-org", name, industry }`. On success: `router.replace("/dashboard")` + `router.refresh()`. Idempotent — if org already exists the API returns the existing `orgId` without error.
+
+#### `src/app/(auth)/forgot/page.tsx` (new)
+
+Client component. `useForm` with `forgotSchema`. Local `sent` state (boolean). On submit: `supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + /reset })`. On success: flips `sent = true` → renders confirmation text ("If that email is registered, a password reset link is on its way"). No email enumeration: does not reveal whether the address exists.
+
+#### `src/app/(auth)/reset/page.tsx` (new)
+
+Client component. `useForm` with `resetSchema` (password + confirm with `refine` cross-field check). On submit: `supabase.auth.updateUser({ password: values.password })`. On success: `toast.success("Password updated")` → `router.replace("/dashboard")`.
+
+#### `src/app/api/auth/signout/route.ts` (new)
+
+```ts
+export async function POST(req: Request) {
+  const supabase = await createClient();
+  await supabase.auth.signOut();
+  return NextResponse.redirect(new URL("/login", req.url), 303);
+}
+```
+
+Used via `<form action="/api/auth/signout" method="post">` in the invite page's wrong-account state. HTTP 303 ensures browser GETs the redirect (standard POST-redirect-GET pattern).
 
 ---
 
 ### New Files — Invite System
 
 #### `src/lib/email/templates/InviteEmail.tsx`
-React email template with inline styles. Renders org name, inviter name, role, accept link.
+
+React function component (no `"use client"` — runs server-side inside Resend). Renders:
+- Heading: "You've been invited to {orgName}".
+- Paragraph: "{inviterName} invited you to join {orgName} on PropelRFP. Click the button below to accept. The link expires in 7 days."
+- CTA button: navy `#162B44` background, white text, "Accept invitation" label, links to `acceptUrl`.
+- Footer disclaimer: "If you weren't expecting this email, you can safely ignore it."
+All styles are inline (required for email client compatibility).
 
 #### `src/lib/email/sendInvite.ts`
-Resend wrapper. Reads `RESEND_API_KEY` and `RESEND_FROM_EMAIL` env vars. Returns `{ error }` on failure (graceful — invite is still saved even if email fails).
+
+```ts
+export async function sendInvite({ to, orgName, inviterName, token }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const fromAddr = process.env.RESEND_FROM_EMAIL ?? "PropelRFP <onboarding@resend.dev>";
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
+  if (!apiKey) throw new Error("RESEND_API_KEY not configured");
+  const resend = new Resend(apiKey);
+  await resend.emails.send({
+    from: fromAddr,
+    to,
+    subject: `You're invited to ${orgName} on PropelRFP`,
+    react: InviteEmail({ orgName, inviterName, acceptUrl: `${appUrl}/invite/${token}` }),
+  });
+}
+```
+
+Throws on failure. The caller (`POST /api/org/invitations`) catches and returns partial-success so the saved invitation is not lost.
 
 #### `src/app/api/org/invitations/route.ts`
-- `POST`: Upsert-or-resend invite. Generates 24-byte base64url token via `crypto.getRandomValues`. Sends Resend email. Returns `data` + optional `error` when email fails (partial success pattern).
-- `DELETE`: Soft-revoke — sets `status: "revoked"`.
+
+**POST** — Create or resend invite (owner/admin):
+1. `requireRole(["owner", "admin"])`.
+2. Guard: email already a member of this org → `409 conflict`.
+3. Check for existing invite row (`org_id + email`). If found: UPDATE with new token, reset `expires_at` to +7 days, reset `status = "pending"`. If not: INSERT.
+4. Token: `crypto.getRandomValues(new Uint8Array(24))` → `Buffer.from(bytes).toString("base64url")` (Web Crypto API, no `node:crypto` import).
+5. Parallel fetch org name + inviter display name.
+6. Call `sendInvite()`. If it throws: return `NextResponse.json({ data: { invitation }, error: { code: "email_failed", message: "Invite saved but email failed to send. Click Resend to try again." } }, { status: 200 })` — partial success, HTTP 200 so client reads the body.
+7. On email success: `ok({ invitation })`.
+
+**DELETE** — Soft-revoke (owner/admin): reads `?id=` query param, sets `status: "revoked"`.
 
 #### `src/app/api/org/invitations/[token]/route.ts`
-- `POST` (accept): Uses `createServiceClient()` for token lookup (bypasses RLS — no public policy on invitations table). Validates email match against signed-in user. Guards against users already in another org. Inserts `users` row, marks invitation `accepted`.
+
+**POST** — Accept invite:
+1. Validate session with `createClient()`. No session → `ApiError 401`.
+2. Look up invite by token using `createServiceClient()` — bypasses RLS (no public select policy).
+3. Validate chain: invite exists → status is `"pending"` → not expired → email matches `user.email` (case-insensitive). Returns `404 / 410 / 403` on any failure.
+4. Check `users` table — if user already has a row (already in an org) → `409`.
+5. Insert `users` row: `{ id: user.id, org_id: invite.org_id, email, full_name, role: invite.role }`.
+6. Update invitation via service client: `{ status: "accepted", accepted_at: new Date().toISOString() }`.
+7. Return `ok({ orgId })`.
 
 #### `src/app/(auth)/invite/[token]/page.tsx`
-Server component using `createServiceClient()` for token lookup. Four render paths: invalid/expired token, unauthenticated (shows login prompt), wrong account (logged in as different email), ready-to-accept.
+
+Server component. Uses `createServiceClient()` for token lookup. Four render branches:
+1. **Invalid/expired**: `!invite || invite.status !== "pending" || expires_at < now` → "Invite is no longer valid" card.
+2. **Unauthenticated**: no session → "Join {orgName}" card showing invite email, Create Account link (prefilled with `?invite=<token>&email=<email>`), sign-in footer link.
+3. **Wrong account**: signed-in user email ≠ invite email → "Wrong account" card with `<form action="/api/auth/signout" method="post">` sign-out button.
+4. **Ready to accept**: all checks pass → "Join {orgName}" card with "You'll be added as {role}" subtitle + `<AcceptButton token={token} />`.
 
 #### `src/app/(auth)/invite/[token]/AcceptButton.tsx`
-Client component. POSTs to `/api/org/invitations/[token]` then redirects to `/dashboard` on success.
+
+Client component (`"use client"`). `useState(busy)`. On click: `POST /api/org/invitations/{token}`. On error: `toast.error(json.error.message)`, `setBusy(false)`. On success: `router.replace("/dashboard")` + `router.refresh()`.
 
 ---
 
 ### New Files — Org & Member Settings
 
 #### `src/app/(dashboard)/settings/layout.tsx`
-Tab navigation: Organization, Members, Billing (disabled stub for Week 7).
+
+Server component. Tabs array:
+```ts
+const TABS = [
+  { href: "/settings/org",     label: "Organization" },
+  { href: "/settings/members", label: "Members" },
+  { href: "#",                 label: "Billing", disabled: true },
+];
+```
+Renders `<h1>Settings</h1>` + horizontal tab nav with border-bottom active indicator. Disabled tab rendered as `<span>` with `cursor-not-allowed` and `title="Coming soon"`.
 
 #### `src/app/(dashboard)/settings/org/page.tsx`
-Server component. Reads org + user role. Renders `OrgForm` (all roles) and `DangerZone` (owner only).
+
+Server component. Reads: session → `users(org_id, role)` → `organizations(id, name, industry, website, size)`. Redirects to `/login` on any missing step. Renders:
+- "Organization details" section + `<OrgForm initialData={org} canEdit={role === "owner"} />`.
+- "Danger zone" section + `<DangerZone orgName={org.name} />` — only shown when `role === "owner"`.
 
 #### `src/app/(dashboard)/settings/org/OrgForm.tsx`
-Client form. PATCHes `/api/org` with org name, industry, website, size.
+
+Client component. `useForm` with `orgUpdateSchema`. Fields:
+- `name` — text Input.
+- `industry` — shadcn/ui Select from `INDUSTRIES` constant. Uses `setValue` on `onValueChange`.
+- `website` — url Input, optional.
+- `size` — Select from `["1-10", "11-50", "51-200", "201-1000", "1000+"]`, optional.
+
+All fields `disabled={!canEdit}` when viewer is not owner. On submit: `PATCH /api/org` with JSON body. On success: `toast.success("Saved")` + `router.refresh()`.
 
 #### `src/app/(dashboard)/settings/org/DangerZone.tsx`
-Client component. Delete org confirmation dialog — user must type org name to confirm. Calls `DELETE /api/org` then `supabase.auth.signOut()`.
+
+Client component. State: `confirm` (string), `open` (boolean), `busy` (boolean). Renders a destructive-bordered box with warning text and a Dialog:
+- Trigger: "Delete organization" (destructive variant Button).
+- Dialog body: user must type org name exactly into an Input to enable "Delete forever" button (`confirm !== orgName` keeps it disabled).
+- On confirm: `DELETE /api/org` → on success: `createClient().auth.signOut()` → `router.replace("/signup")`.
 
 #### `src/app/api/org/route.ts`
-- `PATCH` (owner only): update org fields.
-- `DELETE` (owner only): cascade-delete org and all related data.
+
+```
+PATCH  /api/org  — requireRole(["owner"])
+  body: orgUpdateSchema
+  updates: name, industry, website (null if empty string), size (null if undefined)
+  returns: ok({ id, name, industry, website, size })
+
+DELETE /api/org  — requireRole(["owner"])
+  deletes organizations row by orgId
+  cascade removes: users, subscriptions, knowledge_docs, doc_chunks, rfp_projects, rfp_sections, gen_logs, invitations
+  returns: ok(null)
+```
+
+Both wrapped in `withErrorHandling`.
 
 #### `src/app/(dashboard)/settings/members/page.tsx`
-Server component. Fetches active members + pending invitations. Renders `InviteForm` and `MembersTable`.
+
+Server component. Reads session → `users(id, org_id, role)`. Parallel fetch:
+- Members: `users` WHERE `org_id = me.org_id` ORDER BY `created_at ASC` (all roles).
+- Invites: `invitations` WHERE `org_id = me.org_id AND status = "pending"` ORDER BY `created_at DESC`.
+
+`canInvite = role in ["owner", "admin"]`. Renders invite section (with `<InviteForm />` if `canInvite`) + members section with `<MembersTable>`.
 
 #### `src/app/(dashboard)/settings/members/InviteForm.tsx`
-Client form. Email + role Select. Handles `email_failed` response as warning toast (invite saved but email failed).
+
+Client component. `useForm` with `inviteCreateSchema` (defaults `role: "member"`). Fields: email Input + role Select (Member / Admin). On submit: `POST /api/org/invitations`. Three response paths:
+- `json.error.code === "email_failed"` → `toast.warning(message)`, reset, refresh (invite saved, email failed — warning not error).
+- Other error → `toast.error(message)`.
+- Success → `toast.success("Invite sent to {email}")`, reset, refresh.
 
 #### `src/app/(dashboard)/settings/members/MembersTable.tsx`
-Complex client table with dropdown menus per row: change role, transfer ownership, remove member (for members), cancel/resend invite (for pending invites). Two confirmation dialogs: transfer ownership (irreversible warning), remove member.
+
+Client component. Types:
+```ts
+type Member = { id, email, full_name, role: UserRole, created_at };
+type Invite = { id, email, role, status, expires_at, created_at };
+```
+
+**Active members table** — each row has a dropdown menu (shown only if `canManage && member.id !== currentUserId`):
+- *Owner only*: "Change role" → sub-menu (Admin / Member) → `PATCH /api/org/members/{id}` with `{ role }`. "Transfer ownership" → opens `transferTarget` confirmation Dialog.
+- *Owner + Admin*: "Remove from organization" (conditional on `canRemove()`) → opens `removeTarget` confirmation Dialog.
+
+**Pending invites table** — each row has a dropdown menu (shown if `canManage`):
+- "Resend" → `POST /api/org/invitations` with same `{ email, role }`.
+- "Cancel invite" → `DELETE /api/org/invitations?id={id}`.
+
+**Confirmation Dialogs**:
+- *Transfer ownership*: "Will become new owner. You will become admin." → `POST /api/org/members/{id}` with `{ action: "transfer-ownership" }`.
+- *Remove member*: "Will lose access immediately." → `DELETE /api/org/members/{id}`.
+
+`canRemove(member)` logic: returns `false` if same user; `true` for owner (any non-owner); `true` for admin only if `member.role === "member"`.
 
 #### `src/app/api/org/members/[userId]/route.ts`
-- `PATCH` (owner): change member role.
-- `POST` (owner): transfer ownership — sets current owner to `admin`, target to `owner` (two-step, not atomic at app layer; acceptable for MVP).
-- `DELETE` (owner/admin): remove member with role guards (admins cannot remove other admins or owners; owners cannot self-remove if sole owner).
+
+```
+PATCH  — requireRole(["owner"])
+  body: memberRoleSchema { role }
+  guards: cannot change own role | cannot demote owner directly | target must be in same org
+  action: UPDATE users.role = body.role WHERE id = userId
+
+POST   — requireRole(["owner"])
+  body: memberActionSchema { action: "transfer-ownership" }
+  guards: cannot self-transfer | target must be in same org
+  action: UPDATE users.role = "owner" WHERE id = userId
+          UPDATE users.role = "admin"  WHERE id = actorId
+  (two sequential UPDATEs, not atomic — acceptable for MVP)
+
+DELETE — requireRole(["owner", "admin"])
+  guards: cannot self-remove | target must be in same org
+          admin can only remove members (not other admins or owners)
+          cannot remove the owner
+  action: DELETE FROM users WHERE id = userId
+```
+
+All methods wrapped in `withErrorHandling`.
+
+---
+
+### New Files — Dashboard
+
+#### `src/app/(dashboard)/dashboard/page.tsx` (replaced Week 1 placeholder)
+
+Server component. Reads session → `users(org_id)` → `organizations(name)`. Redirects to `/signup/org` if no `org_id`. Renders:
+- `<h1>Welcome to {org.name}.</h1>`.
+- Subtext: "Knowledge Base lands next week. In the meantime, set up your team and review your organization details."
+- Two CTAs: "Organization settings" (outline Button → `/settings/org`) and "Invite teammates" (primary Button → `/settings/members`).
 
 ---
 
 ### Modified Files
 
 #### `src/types/database.ts`
-Added `invitations` table with `Row`, `Insert`, `Update` types and two `Relationships` entries (`org_id → organizations`, `invited_by → users`).
+
+Added `invitations` table entry with full `Row`, `Insert`, `Update` types. `Insert` allows `token`, `status`, `expires_at` to be optional (DB defaults apply). Two `Relationships` entries:
+- `{ foreignKeyName: "invitations_org_id_fkey", columns: ["org_id"], referencedRelation: "organizations" }`
+- `{ foreignKeyName: "invitations_invited_by_fkey", columns: ["invited_by"], referencedRelation: "users" }`
 
 #### `src/types/index.ts`
-Added `Invitation = Tables<"invitations">`, `InvitationStatus` union, `InviteRole` union.
+
+Added after `GenLog`:
+```ts
+export type Invitation = Tables<"invitations">;
+export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
+export type InviteRole = "admin" | "member";
+```
 
 #### `src/lib/supabase/client.ts`
-Added `?? "https://placeholder.supabase.co"` and `?? "placeholder-anon-key"` fallbacks. **Why:** Next.js prerenders client components during `pnpm build`. When Supabase env vars are absent (CI, staging without secrets), `createBrowserClient` would throw. Placeholder values prevent the throw; actual API calls only happen client-side in event handlers.
+
+```ts
+// Before:
+return createBrowserClient<Database>(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+// After:
+return createBrowserClient<Database>(
+  process.env.NEXT_PUBLIC_SUPABASE_URL ?? "https://placeholder.supabase.co",
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "placeholder-anon-key"
+);
+```
+
+**Why:** `pnpm build` prerenders client components. Without `.env.local` (CI, staging), `createBrowserClient` throws `TypeError: Invalid URL` at prerender time and aborts the build. Placeholder values let prerendering succeed; actual Supabase API calls only happen client-side inside event handlers where runtime env vars are present.
 
 #### `src/lib/supabase/middleware.ts`
-Full rewrite. Now handles three cases beyond simple auth check:
-1. **Eviction:** `auth.users` row exists but no `users` table row, and path is not in orphan-OK list → `signOut()` → redirect `/login?error=removed`.
-2. **Orphan recovery:** User has `auth.users` but no `org_id` → redirect `/signup/org` (mid-signup recovery).
-3. **Normal:** Authenticated user passes through; unauthenticated user on protected path → `/login`.
-Orphan-OK prefixes: `/signup/org`, `/auth/`, `/api/auth/signup`.
 
-#### `src/app/(auth)/login/page.tsx`
-Replaced Week 1 placeholder with real implementation (see above).
+Full rewrite of `updateSession()`. Logic:
 
-#### `src/app/(dashboard)/dashboard/page.tsx`
-Replaced Week 1 placeholder. Now a server component that reads org name and renders two CTAs: "Org Settings" → `/settings/org` and "Manage Members" → `/settings/members`.
+```
+PUBLIC_PATHS    = ["/", "/login", "/signup", "/forgot", "/reset"]
+ORPHAN_OK_PREFIXES = ["/signup/org", "/auth/", "/api/auth/signup"]
+
+isPublic  = pathname in PUBLIC_PATHS || pathname.startsWith("/auth/") || pathname.startsWith("/invite/")
+isOrphanOk = pathname.startsWith(any ORPHAN_OK_PREFIX)
+
+if !user && !isPublic:
+  → redirect /login
+
+if user:
+  fetch users row (.maybeSingle())
+
+  if !dbUser && !isOrphanOk:
+    → signOut()
+    → redirect /login?error=removed          ← EVICTION
+
+  if dbUser && (pathname === "/login" || "/signup"):
+    → redirect /dashboard                    ← ALREADY LOGGED IN GUARD
+
+  if dbUser && !dbUser.org_id && !isOrphanOk && !isPublic:
+    → redirect /signup/org                   ← ORPHAN RECOVERY
+```
+
+Three behaviors added vs. Week 1:
+1. **Eviction**: `auth.users` row exists but no `users` table row (user was removed from org by an admin). Signs out + redirects to `/login?error=removed`. The `RemovedBanner` in the login page reads this query param and shows an amber warning.
+2. **Orphan recovery**: User is authenticated and has a `users` row but `org_id` is null (crashed mid-signup between step 1 and step 2). Redirects to `/signup/org` to complete org creation. Idempotent — the step 2 API has a guard that returns the existing `orgId` if already created.
+3. **Invite path**: `/invite/*` added to `isPublic` so unauthenticated users can see the invite landing page.
+
+#### `src/app/layout.tsx`
+
+Added `<Toaster richColors />` from `@/components/ui/sonner` inside `<body>`. Required to render toast notifications from any client component in the app. Only change to the root layout in Week 2.
+
+---
+
+### Bugs Fixed During Week 2
+
+#### Bug 1 — Security: `invitations_token_lookup` policy `using (true)`
+
+Initial migration draft (`67a7c6d`) included:
+```sql
+create policy "invitations_token_lookup" on invitations
+  for select using (true);
+```
+This would make the entire `invitations` table (all emails, tokens, org associations) publicly readable without authentication. Flagged during code quality review.
+
+**Fix** (`44409d6`): removed the policy. Token lookups moved server-side using `createServiceClient()` — the service role key bypasses RLS and is never exposed to the browser.
+
+#### Bug 2 — Build failure: `useSearchParams()` not wrapped in `<Suspense>`
+
+```
+Error: useSearchParams() should be wrapped in a suspense boundary at page "/login"
+```
+
+`LoginPage` called `useSearchParams()` directly at the top level of a client component rendered during static prerender.
+
+**Fix** (`ed8d016`): extracted `RemovedBanner` as a separate component that contains the `useSearchParams()` call. Wrapped `<RemovedBanner />` in `<Suspense>` inside `LoginForm`. Next.js only requires the boundary around the component that calls the hook.
+
+#### Bug 3 — Build failure: `createBrowserClient` throws without env vars
+
+```
+TypeError: Invalid URL
+  at createBrowserClient (...)
+```
+
+`pnpm build` prerenders `/signup/org/page.tsx` which imports `createClient()` from `client.ts`. `process.env.NEXT_PUBLIC_SUPABASE_URL` is `undefined` in build environments without `.env.local`.
+
+**Fix** (`ed8d016`): added `??` fallback values in `createBrowserClient` call (see `src/lib/supabase/client.ts` entry above).
 
 ---
 
@@ -175,18 +605,102 @@ Replaced Week 1 placeholder. Now a server component that reads org name and rend
 
 | Decision | Reason |
 |---|---|
-| Service role for token lookup | No RLS policy with `using (true)` (would expose all invite tokens publicly). `createServiceClient()` is safe — service key is server-only. |
-| Upsert-or-resend invite | `unique(org_id, email)` means re-inviting the same address updates the existing row rather than creating a duplicate. |
-| Graceful email failure | Invite is saved to DB before sending email. If Resend fails, API returns `{ data, error }` — callers (UI + API consumers) can show a warning without losing the invite. |
-| Two-step ownership transfer | Supabase JS client has no transaction API. Acceptable for MVP; could be moved to a Postgres function in Week 7+. |
-| `<Suspense>` around `RemovedBanner` | Next.js requires any component using `useSearchParams()` to be wrapped in `<Suspense>` to avoid static rendering errors. Extracted as a child component to keep `LoginForm` clean. |
-| Deferred automated tests | User chose to defer Playwright/Vitest integration tests to a later sprint. Manual smoke matrix (23 cases) documented in spec §10. |
+| `createServiceClient()` for all invite token lookups | No RLS `using (true)` policy allowed. Service role is safe — service key is server-only, never in browser. |
+| Upsert-or-resend pattern on `POST /api/org/invitations` | `unique(org_id, email)` constraint prevents duplicate rows. Re-inviting regenerates the token and resets expiry rather than creating a second row. |
+| Partial success response when Resend fails | Invite row is written to DB before email send. If Resend fails, the invite still exists and can be resent. API returns `{ data, error }` at HTTP 200 so the UI can show a warning toast without losing the invite. |
+| Two-step ownership transfer (not atomic) | Supabase JS client provides no transaction API at application layer. Two sequential UPDATEs used for MVP. Can be replaced with a Postgres `SECURITY DEFINER` function called via RPC in Week 7+. |
+| `<Suspense>` wrapping `RemovedBanner` | Next.js static rendering requirement for any component calling `useSearchParams()`. Extracted as a dedicated child component to keep `LoginForm` clean. |
+| Hybrid RSC + Client form pattern | Server components handle reads (org name, member list). Client components (`"use client"`) handle all mutations via `fetch` + react-hook-form. No Server Actions — API Route Handlers enforce Zod + RBAC uniformly. |
+| `requireRole` throws `ApiError` | Route handlers wrapped by `withErrorHandling` which catches `ApiError` and maps it to `{ data, error }` envelope automatically. No per-route try/catch boilerplate for role errors. |
+| Deferred automated tests | User chose to defer Playwright/Vitest integration tests to a later sprint. Manual smoke matrix (23 cases) documented in design spec §10. |
+
+---
+
+### Complete Route Table (Week 2)
+
+| Method | Route | File | Minimum role |
+|---|---|---|---|
+| GET | `/login` | `src/app/(auth)/login/page.tsx` | Public |
+| GET | `/signup` | `src/app/(auth)/signup/page.tsx` | Public |
+| GET | `/signup/org` | `src/app/(auth)/signup/org/page.tsx` | Session (orphan-ok) |
+| GET | `/forgot` | `src/app/(auth)/forgot/page.tsx` | Public |
+| GET | `/reset` | `src/app/(auth)/reset/page.tsx` | Public |
+| GET | `/invite/[token]` | `src/app/(auth)/invite/[token]/page.tsx` | Public (state-conditional UI) |
+| POST | `/api/auth/signup` | `src/app/api/auth/signup/route.ts` | Varies by action |
+| POST | `/api/auth/signout` | `src/app/api/auth/signout/route.ts` | Session |
+| PATCH | `/api/org` | `src/app/api/org/route.ts` | Owner |
+| DELETE | `/api/org` | `src/app/api/org/route.ts` | Owner |
+| POST | `/api/org/invitations` | `src/app/api/org/invitations/route.ts` | Owner / Admin |
+| DELETE | `/api/org/invitations` | `src/app/api/org/invitations/route.ts` | Owner / Admin |
+| POST | `/api/org/invitations/[token]` | `src/app/api/org/invitations/[token]/route.ts` | Session |
+| PATCH | `/api/org/members/[userId]` | `src/app/api/org/members/[userId]/route.ts` | Owner |
+| POST | `/api/org/members/[userId]` | `src/app/api/org/members/[userId]/route.ts` | Owner |
+| DELETE | `/api/org/members/[userId]` | `src/app/api/org/members/[userId]/route.ts` | Owner / Admin |
+| GET | `/settings/org` | `src/app/(dashboard)/settings/org/page.tsx` | Session |
+| GET | `/settings/members` | `src/app/(dashboard)/settings/members/page.tsx` | Session |
+| GET | `/dashboard` | `src/app/(dashboard)/dashboard/page.tsx` | Session |
+
+---
+
+### Complete File Index — Week 2
+
+**Created:**
+- `supabase/migrations/002_invitations.sql`
+- `src/lib/schemas/auth.ts`
+- `src/lib/schemas/org.ts`
+- `src/lib/auth/requireRole.ts`
+- `src/lib/email/templates/InviteEmail.tsx`
+- `src/lib/email/sendInvite.ts`
+- `src/components/auth/AuthCard.tsx`
+- `src/components/auth/GoogleButton.tsx`
+- `src/components/auth/FormField.tsx`
+- `src/components/ui/button.tsx`
+- `src/components/ui/input.tsx`
+- `src/components/ui/label.tsx`
+- `src/components/ui/card.tsx`
+- `src/components/ui/dialog.tsx`
+- `src/components/ui/table.tsx`
+- `src/components/ui/dropdown-menu.tsx`
+- `src/components/ui/select.tsx`
+- `src/components/ui/alert.tsx`
+- `src/components/ui/sonner.tsx`
+- `src/app/(auth)/signup/org/page.tsx`
+- `src/app/(auth)/forgot/page.tsx`
+- `src/app/(auth)/reset/page.tsx`
+- `src/app/(auth)/invite/[token]/page.tsx`
+- `src/app/(auth)/invite/[token]/AcceptButton.tsx`
+- `src/app/api/auth/signup/route.ts`
+- `src/app/api/auth/signout/route.ts`
+- `src/app/api/org/route.ts`
+- `src/app/api/org/invitations/route.ts`
+- `src/app/api/org/invitations/[token]/route.ts`
+- `src/app/api/org/members/[userId]/route.ts`
+- `src/app/(dashboard)/settings/layout.tsx`
+- `src/app/(dashboard)/settings/org/page.tsx`
+- `src/app/(dashboard)/settings/org/OrgForm.tsx`
+- `src/app/(dashboard)/settings/org/DangerZone.tsx`
+- `src/app/(dashboard)/settings/members/page.tsx`
+- `src/app/(dashboard)/settings/members/InviteForm.tsx`
+- `src/app/(dashboard)/settings/members/MembersTable.tsx`
+
+**Modified:**
+- `src/types/database.ts` — added `invitations` table type
+- `src/types/index.ts` — added `Invitation`, `InvitationStatus`, `InviteRole`
+- `src/lib/api.ts` — added `withErrorHandling` wrapper
+- `src/lib/supabase/client.ts` — added `??` env var fallbacks for build safety
+- `src/lib/supabase/middleware.ts` — full rewrite with eviction + orphan recovery
+- `src/app/(auth)/login/page.tsx` — replaced Week 1 placeholder with real implementation
+- `src/app/(auth)/signup/page.tsx` — replaced Week 1 placeholder with real implementation
+- `src/app/(dashboard)/dashboard/page.tsx` — replaced Week 1 placeholder with org-aware CTA page
+- `src/app/layout.tsx` — added `<Toaster richColors />`
+- `package.json` — added 9 new production deps (see New Dependencies above)
+- `pnpm-lock.yaml` — regenerated
 
 ---
 
 ### Smoke Tests
 
-Automated Playwright/Vitest tests deferred to a later sprint per user decision. Manual smoke matrix (23 test cases covering signup wizard, login, Google OAuth, invite flow, settings CRUD, eviction/orphan recovery, RBAC) documented in `docs/superpowers/specs/2026-04-30-week2-auth-org-design.md` §10.
+Automated Playwright/Vitest tests deferred to a later sprint per user decision. Manual smoke matrix (23 test cases covering signup wizard, login, Google OAuth, invite flow, settings CRUD, eviction/orphan recovery, RBAC enforcement) documented in `docs/superpowers/specs/2026-04-30-week2-auth-org-design.md` §10.
 
 ---
 
@@ -194,10 +708,22 @@ Automated Playwright/Vitest tests deferred to a later sprint per user decision. 
 
 | Item | Deferred to |
 |---|---|
-| Playwright/Vitest integration tests for auth + org flows | Later sprint (user decision) |
-| Billing tab in settings (currently disabled stub) | Week 7 — Payments module |
-| Ownership transfer atomicity (Postgres transaction) | Week 7+ |
-| Subscription seat-count check on member invite | Week 7 (PLAN_LIMITS enforcement) |
+| Playwright/Vitest integration tests for all Week 2 flows | Later sprint (user decision) |
+| Billing settings tab (currently `disabled` stub, shows "Coming soon") | Week 7 — Payments module |
+| Ownership transfer atomicity (two sequential UPDATEs, not a Postgres transaction) | Week 7+ — replace with `SECURITY DEFINER` Postgres function via RPC |
+| Subscription seat-count check on member invite (`PLAN_LIMITS` enforcement) | Week 7 — Payments module |
+
+---
+
+### New Environment Variables (Week 2)
+
+No new variables beyond what was already in `.env.example` from Week 1. The variables used in Week 2 are:
+
+| Variable | Used by | Notes |
+|---|---|---|
+| `RESEND_API_KEY` | `src/lib/email/sendInvite.ts` | Throws if missing |
+| `RESEND_FROM_EMAIL` | `src/lib/email/sendInvite.ts` | Optional; defaults to `PropelRFP <onboarding@resend.dev>` |
+| `NEXT_PUBLIC_APP_URL` | `src/lib/email/sendInvite.ts` | Used to build invite accept URL; defaults to `http://localhost:3000` |
 
 ---
 
