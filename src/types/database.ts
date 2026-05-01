@@ -325,6 +325,58 @@ export interface Database {
           },
         ];
       };
+      invitations: {
+        Row: {
+          id: string;
+          org_id: string;
+          email: string;
+          role: "admin" | "member";
+          token: string;
+          invited_by: string;
+          status: "pending" | "accepted" | "revoked" | "expired";
+          expires_at: string;
+          created_at: string;
+          accepted_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          org_id: string;
+          email: string;
+          role?: "admin" | "member";
+          token?: string;
+          invited_by: string;
+          status?: "pending" | "accepted" | "revoked" | "expired";
+          expires_at?: string;
+          created_at?: string;
+          accepted_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          org_id?: string;
+          email?: string;
+          role?: "admin" | "member";
+          token?: string;
+          invited_by?: string;
+          status?: "pending" | "accepted" | "revoked" | "expired";
+          expires_at?: string;
+          created_at?: string;
+          accepted_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "invitations_org_id_fkey";
+            columns: ["org_id"];
+            referencedRelation: "organizations";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "invitations_invited_by_fkey";
+            columns: ["invited_by"];
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
     };
     Views: Record<never, never>;
     Functions: Record<never, never>;
