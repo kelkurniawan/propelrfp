@@ -5,6 +5,206 @@ Format: `[Week N — Phase] Date` → grouped by file, with what changed and why
 
 ---
 
+## [Week 2 — Auth & Org Module] 2026-05-01
+
+**Branch:** `feature/auth-and-org` → PR into `develop`
+**Build status:** `pnpm typecheck` and `pnpm build` both pass clean. 17 routes compiled successfully.
+
+### Overview
+
+Week 2 delivered the complete Auth & Org module: real login/signup flows (email + Google OAuth), org creation wizard, team invite system, org and member settings pages, role-based access control, and eviction/orphan recovery in the proxy.
+
+---
+
+### New Migration
+
+#### `supabase/migrations/002_invitations.sql`
+- Creates the `invitations` table: `id`, `org_id`, `email`, `role` (admin/member), `token` (unique 24-byte base64url), `status` (pending/accepted/revoked/expired), `invited_by`, `expires_at` (7 days), `created_at`.
+- Unique constraint `unique(org_id, email)` prevents duplicate pending invites per org.
+- Three RLS policies: `invitations_org_read` (members read own org's invites), `invitations_admin_insert` (admins/owners create), `invitations_admin_update` (admins/owners revoke).
+- **Security note:** No `invitations_token_lookup` policy was added. An earlier draft included `for select using (true)` which would have made all invitation tokens publicly readable. Removed before commit. Token lookups use `createServiceClient()` server-side (service role bypasses RLS safely).
+
+---
+
+### New Dependencies
+
+| Package | Purpose |
+|---|---|
+| `react-hook-form` ^7.x | Controlled form state with Zod resolver |
+| `@hookform/resolvers` ^5.x | Bridge between react-hook-form and Zod |
+| `resend` | Transactional email for invite links |
+| `@react-email/components` | React email template primitives |
+
+#### shadcn/ui components added (via `pnpm dlx shadcn@latest add`)
+`button`, `input`, `label`, `card`, `dialog`, `table`, `dropdown-menu`, `select`, `alert`, `sonner`
+
+---
+
+### New Files — Schemas & Auth Utilities
+
+#### `src/lib/schemas/auth.ts`
+Zod schemas: `loginSchema`, `signupAccountSchema`, `forgotSchema`, `resetSchema`, `signupBodySchema` (discriminated union on `action: "create-account" | "create-org"`).
+
+#### `src/lib/schemas/org.ts`
+Zod schemas: `orgUpdateSchema`, `inviteCreateSchema`, `memberRoleSchema`, `memberActionSchema`.
+
+#### `src/lib/auth/requireRole.ts`
+- `ApiError` class: `code`, `message`, `status` fields. Thrown by route guards.
+- `requireRole(allowed: UserRole[])`: validates session, fetches `users` row, checks role membership. Returns `{ userId, orgId, role, supabase }`. Throws `ApiError` on any failure.
+
+#### `src/lib/api.ts` (extended)
+- `withErrorHandling(handler)`: route wrapper catching `ZodError → 400`, `ApiError → status`, else `→ 500`.
+
+---
+
+### New Files — Auth Pages & Components
+
+#### `src/components/auth/AuthCard.tsx`
+Branded card wrapper for all auth pages. Renders PropelRFP logo mark, white card container, and a footer slot.
+
+#### `src/components/auth/GoogleButton.tsx`
+Client component. Calls `supabase.auth.signInWithOAuth({ provider: "google" })` with `redirectTo: /auth/callback?next=<next>`.
+
+#### `src/components/auth/FormField.tsx`
+Accessible label + children + error message wrapper used by all auth forms.
+
+#### `src/app/(auth)/login/page.tsx`
+Real login page replacing the Week 1 placeholder. Email/password form with react-hook-form + Zod, Google OAuth button, "Forgot password?" link. Includes `RemovedBanner` component (reads `?error=removed` query param) extracted into a `<Suspense>` boundary to satisfy Next.js `useSearchParams()` requirements.
+
+#### `src/app/(auth)/signup/page.tsx`
+Wizard step 1: name, email, password. POSTs `{ action: "create-account", ... }` to `/api/auth/signup`.
+
+#### `src/app/(auth)/signup/org/page.tsx`
+Wizard step 2: org name + industry (Select from `INDUSTRIES`). POSTs `{ action: "create-org", ... }` to `/api/auth/signup`. Prefills org name from Google user metadata on OAuth signups.
+
+#### `src/app/(auth)/forgot/page.tsx`
+Password reset request form. Calls `supabase.auth.resetPasswordForEmail()`.
+
+#### `src/app/(auth)/reset/page.tsx`
+New-password form. Calls `supabase.auth.updateUser({ password })`. Validates password confirmation match via Zod `refine`.
+
+#### `src/app/api/auth/signout/route.ts`
+POST: calls `supabase.auth.signOut()` then redirects to `/login`.
+
+---
+
+### New Files — Invite System
+
+#### `src/lib/email/templates/InviteEmail.tsx`
+React email template with inline styles. Renders org name, inviter name, role, accept link.
+
+#### `src/lib/email/sendInvite.ts`
+Resend wrapper. Reads `RESEND_API_KEY` and `RESEND_FROM_EMAIL` env vars. Returns `{ error }` on failure (graceful — invite is still saved even if email fails).
+
+#### `src/app/api/org/invitations/route.ts`
+- `POST`: Upsert-or-resend invite. Generates 24-byte base64url token via `crypto.getRandomValues`. Sends Resend email. Returns `data` + optional `error` when email fails (partial success pattern).
+- `DELETE`: Soft-revoke — sets `status: "revoked"`.
+
+#### `src/app/api/org/invitations/[token]/route.ts`
+- `POST` (accept): Uses `createServiceClient()` for token lookup (bypasses RLS — no public policy on invitations table). Validates email match against signed-in user. Guards against users already in another org. Inserts `users` row, marks invitation `accepted`.
+
+#### `src/app/(auth)/invite/[token]/page.tsx`
+Server component using `createServiceClient()` for token lookup. Four render paths: invalid/expired token, unauthenticated (shows login prompt), wrong account (logged in as different email), ready-to-accept.
+
+#### `src/app/(auth)/invite/[token]/AcceptButton.tsx`
+Client component. POSTs to `/api/org/invitations/[token]` then redirects to `/dashboard` on success.
+
+---
+
+### New Files — Org & Member Settings
+
+#### `src/app/(dashboard)/settings/layout.tsx`
+Tab navigation: Organization, Members, Billing (disabled stub for Week 7).
+
+#### `src/app/(dashboard)/settings/org/page.tsx`
+Server component. Reads org + user role. Renders `OrgForm` (all roles) and `DangerZone` (owner only).
+
+#### `src/app/(dashboard)/settings/org/OrgForm.tsx`
+Client form. PATCHes `/api/org` with org name, industry, website, size.
+
+#### `src/app/(dashboard)/settings/org/DangerZone.tsx`
+Client component. Delete org confirmation dialog — user must type org name to confirm. Calls `DELETE /api/org` then `supabase.auth.signOut()`.
+
+#### `src/app/api/org/route.ts`
+- `PATCH` (owner only): update org fields.
+- `DELETE` (owner only): cascade-delete org and all related data.
+
+#### `src/app/(dashboard)/settings/members/page.tsx`
+Server component. Fetches active members + pending invitations. Renders `InviteForm` and `MembersTable`.
+
+#### `src/app/(dashboard)/settings/members/InviteForm.tsx`
+Client form. Email + role Select. Handles `email_failed` response as warning toast (invite saved but email failed).
+
+#### `src/app/(dashboard)/settings/members/MembersTable.tsx`
+Complex client table with dropdown menus per row: change role, transfer ownership, remove member (for members), cancel/resend invite (for pending invites). Two confirmation dialogs: transfer ownership (irreversible warning), remove member.
+
+#### `src/app/api/org/members/[userId]/route.ts`
+- `PATCH` (owner): change member role.
+- `POST` (owner): transfer ownership — sets current owner to `admin`, target to `owner` (two-step, not atomic at app layer; acceptable for MVP).
+- `DELETE` (owner/admin): remove member with role guards (admins cannot remove other admins or owners; owners cannot self-remove if sole owner).
+
+---
+
+### Modified Files
+
+#### `src/types/database.ts`
+Added `invitations` table with `Row`, `Insert`, `Update` types and two `Relationships` entries (`org_id → organizations`, `invited_by → users`).
+
+#### `src/types/index.ts`
+Added `Invitation = Tables<"invitations">`, `InvitationStatus` union, `InviteRole` union.
+
+#### `src/lib/supabase/client.ts`
+Added `?? "https://placeholder.supabase.co"` and `?? "placeholder-anon-key"` fallbacks. **Why:** Next.js prerenders client components during `pnpm build`. When Supabase env vars are absent (CI, staging without secrets), `createBrowserClient` would throw. Placeholder values prevent the throw; actual API calls only happen client-side in event handlers.
+
+#### `src/lib/supabase/middleware.ts`
+Full rewrite. Now handles three cases beyond simple auth check:
+1. **Eviction:** `auth.users` row exists but no `users` table row, and path is not in orphan-OK list → `signOut()` → redirect `/login?error=removed`.
+2. **Orphan recovery:** User has `auth.users` but no `org_id` → redirect `/signup/org` (mid-signup recovery).
+3. **Normal:** Authenticated user passes through; unauthenticated user on protected path → `/login`.
+Orphan-OK prefixes: `/signup/org`, `/auth/`, `/api/auth/signup`.
+
+#### `src/app/(auth)/login/page.tsx`
+Replaced Week 1 placeholder with real implementation (see above).
+
+#### `src/app/(dashboard)/dashboard/page.tsx`
+Replaced Week 1 placeholder. Now a server component that reads org name and renders two CTAs: "Org Settings" → `/settings/org` and "Manage Members" → `/settings/members`.
+
+---
+
+### Architecture Decisions
+
+| Decision | Reason |
+|---|---|
+| Service role for token lookup | No RLS policy with `using (true)` (would expose all invite tokens publicly). `createServiceClient()` is safe — service key is server-only. |
+| Upsert-or-resend invite | `unique(org_id, email)` means re-inviting the same address updates the existing row rather than creating a duplicate. |
+| Graceful email failure | Invite is saved to DB before sending email. If Resend fails, API returns `{ data, error }` — callers (UI + API consumers) can show a warning without losing the invite. |
+| Two-step ownership transfer | Supabase JS client has no transaction API. Acceptable for MVP; could be moved to a Postgres function in Week 7+. |
+| `<Suspense>` around `RemovedBanner` | Next.js requires any component using `useSearchParams()` to be wrapped in `<Suspense>` to avoid static rendering errors. Extracted as a child component to keep `LoginForm` clean. |
+| Deferred automated tests | User chose to defer Playwright/Vitest integration tests to a later sprint. Manual smoke matrix (23 cases) documented in spec §10. |
+
+---
+
+### Smoke Tests
+
+Automated Playwright/Vitest tests deferred to a later sprint per user decision. Manual smoke matrix (23 test cases covering signup wizard, login, Google OAuth, invite flow, settings CRUD, eviction/orphan recovery, RBAC) documented in `docs/superpowers/specs/2026-04-30-week2-auth-org-design.md` §10.
+
+---
+
+### Open Issues / Deferred Items
+
+| Item | Deferred to |
+|---|---|
+| Playwright/Vitest integration tests for auth + org flows | Later sprint (user decision) |
+| Billing tab in settings (currently disabled stub) | Week 7 — Payments module |
+| Ownership transfer atomicity (Postgres transaction) | Week 7+ |
+| Subscription seat-count check on member invite | Week 7 (PLAN_LIMITS enforcement) |
+
+---
+
+*Next: Week 3 — Knowledge Base module (`feature/knowledge-base`)*
+
+---
+
 ## [Week 1 — Foundation Review] 2026-04-30
 
 **Commit:** `4962e6d` — `fix: Week 1 review — RLS, auth callback URL, lint, theme tokens`
