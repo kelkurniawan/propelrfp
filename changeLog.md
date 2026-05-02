@@ -5,6 +5,831 @@ Format: `[Week N — Phase] Date` → grouped by file, with what changed and why
 
 ---
 
+## [Week 3 — Knowledge Base Module] 2026-05-01
+
+**Branch:** `feature/auth-and-org`
+**Build status:** `pnpm build` passes clean. 26 routes compiled successfully.
+
+**Commits (oldest → newest):**
+
+| SHA       | Message                                                                          |
+| --------- | -------------------------------------------------------------------------------- |
+| `cf73d4c` | `feat(db): add match_doc_chunks and claim_next_queued_doc SQL functions`         |
+| `dc8f536` | `feat(types): add match_doc_chunks and claim_next_queued_doc RPC types`          |
+| `4ff6f13` | `feat(schemas): add KB upload and search Zod schemas`                            |
+| `682e220` | `feat(kb): add Storage helpers (signedUploadUrl, downloadFile, deleteFile)`      |
+| `a982f2e` | `feat(kb): add PDF and DOCX parser wrappers`                                     |
+| `28eaefc` | `feat(kb): add tiktoken sliding-window chunker (1000 tok / 200 overlap)`         |
+| `c243244` | `feat(kb): add plan-limit enforcement helper (assertWithinLimit)`                |
+| `76dce02` | `feat(kb): add processDoc orchestrator (parse → chunk → embed → insert)`         |
+| `cb08a9f` | `fix(kb): add error guard on final status='ready' update in processDoc`          |
+| `f53c872` | `feat(api): add POST /api/kb/upload-url (plan preflight + signed URL)`           |
+| `0d76531` | `feat(api): add GET/POST/DELETE /api/kb/docs`                                    |
+| `2f51171` | `feat(api): add retry and download routes for knowledge docs`                    |
+| `79fe4af` | `feat(api): add process route, cron route, vercel.json cron schedule`            |
+| `89658c8` | `feat(api): add POST /api/kb/search (embedText + match_doc_chunks)`              |
+| `f751e19` | `fix(build): unblock production build for KB module`                             |
+| `e672afa` | `feat(ui): add KB page and UsageMeter server components`                         |
+| `f50c661` | `feat(ui): add DropZone (3-wide semaphore upload) and KbClient state holder`     |
+| `678af01` | `feat(ui): add DocsTable with status badges, retry, download, delete`            |
+| `b7d83a7` | `feat(ui): add KB debug search page and SearchForm with similarity bars`         |
+| `fb0fd15` | `feat(ui): add Knowledge Base link to dashboard, update placeholder text`        |
+| `b29cecd` | `fix(kb): address final review — after() trigger, cron error handling, size cap` |
+
+---
+
+### Overview
+
+Week 3 delivered the complete Knowledge Base module: file upload (PDF + DOCX up to 25 MB) via Supabase Storage signed URLs, an async background processing pipeline (parse → chunk → embed → store), a polling document list with status badges, retry/download/delete actions, plan-based storage limits, a Vercel cron safety net, and a debug semantic-search page. All 18 tasks from the implementation plan were completed. The implementation plan lives at `docs/superpowers/plans/2026-05-01-week3-knowledge-base.md` and the design spec at `docs/superpowers/specs/2026-05-01-week3-knowledge-base-design.md`.
+
+---
+
+### New Migration
+
+#### `supabase/migrations/003_kb_storage.sql`
+
+**Must be applied manually in Supabase SQL Editor** (see header comments in the file). Also requires:
+1. Create a `documents` private Storage bucket in Supabase Studio.
+2. Apply the three Storage RLS policies in the SQL Editor.
+
+Two SQL functions:
+
+```sql
+-- Cosine similarity search over this org's chunks only.
+-- security invoker: runs as caller, so RLS on doc_chunks applies.
+CREATE OR REPLACE FUNCTION match_doc_chunks(
+  query_embedding vector(1536),
+  match_count      int DEFAULT 5
+)
+RETURNS TABLE (
+  id           uuid,
+  doc_id       uuid,
+  content      text,
+  token_count  int,
+  chunk_index  int,
+  similarity   float
+)
+LANGUAGE sql STABLE SECURITY INVOKER
+AS $$
+  SELECT
+    id, doc_id, content, token_count, chunk_index,
+    1 - (embedding <=> query_embedding) AS similarity
+  FROM doc_chunks
+  WHERE org_id = current_org_id()
+  ORDER BY embedding <=> query_embedding
+  LIMIT match_count;
+$$;
+
+-- Atomic queue claim: marks one queued doc as 'processing' and returns it.
+-- security definer: bypasses RLS so the cron service role can claim.
+-- FOR UPDATE SKIP LOCKED: prevents two concurrent cron ticks from claiming the same doc.
+CREATE OR REPLACE FUNCTION claim_next_queued_doc()
+RETURNS TABLE (id uuid, file_type text, org_id uuid)
+LANGUAGE plpgsql SECURITY DEFINER
+AS $$
+BEGIN
+  RETURN QUERY
+    UPDATE knowledge_docs
+    SET status = 'processing', updated_at = now()
+    WHERE knowledge_docs.id = (
+      SELECT kd.id FROM knowledge_docs kd
+      WHERE kd.status = 'queued'
+      ORDER BY kd.created_at ASC
+      LIMIT 1
+      FOR UPDATE SKIP LOCKED
+    )
+    RETURNING knowledge_docs.id, knowledge_docs.file_type, knowledge_docs.org_id;
+END;
+$$;
+
+-- Grant service_role only; REVOKE from public.
+REVOKE ALL ON FUNCTION claim_next_queued_doc() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION claim_next_queued_doc() TO service_role;
+```
+
+Three Storage RLS policies (applied on the `documents` bucket):
+
+```sql
+-- Org members can view their org's files
+CREATE POLICY "org_members_read_objects" ON storage.objects
+  FOR SELECT USING (
+    bucket_id = 'documents'
+    AND (storage.foldername(name))[1] = current_org_id()::text
+  );
+
+-- Org members can upload to their org's folder
+CREATE POLICY "org_members_insert_objects" ON storage.objects
+  FOR INSERT WITH CHECK (
+    bucket_id = 'documents'
+    AND (storage.foldername(name))[1] = current_org_id()::text
+  );
+
+-- Only owner/admin can delete files
+CREATE POLICY "org_admin_delete_objects" ON storage.objects
+  FOR DELETE USING (
+    bucket_id = 'documents'
+    AND (storage.foldername(name))[1] = current_org_id()::text
+    AND (SELECT role FROM users WHERE id = auth.uid()) IN ('owner', 'admin')
+  );
+```
+
+Path scheme: `<orgId>/<docId>.<ext>` — the first path segment is always the orgId, which the Storage policies use for tenant isolation.
+
+---
+
+### New Dependencies Added in Week 3
+
+No new `pnpm add` commands were run in Week 3. All three processing libraries (`pdf-parse`, `mammoth`, `tiktoken`) were already installed in Week 1. The only package.json change was adding them to `serverExternalPackages` in `next.config.ts` (see Modified Files).
+
+---
+
+### New Files — Zod Schemas
+
+#### `src/lib/schemas/kb.ts`
+
+```ts
+export const KB_MAX_FILE_BYTES = 25 * 1024 * 1024; // 25 MB
+
+// Used by /api/kb/upload-url (preflight)
+export const kbUploadSchema = z.object({
+  name: z.string().min(1).max(255),
+  size: z.number().int().min(1).max(KB_MAX_FILE_BYTES),
+  type: z.enum(["pdf", "docx"]),
+});
+
+// Used by POST /api/kb/docs (after upload completes)
+export const kbDocsPostSchema = z.object({
+  docId: z.string().min(1),
+  name: z.string().min(1).max(255),
+  size: z.number().int().min(1).max(KB_MAX_FILE_BYTES),
+  type: z.enum(["pdf", "docx"]),
+  path: z.string().min(1),
+});
+
+// Used by POST /api/kb/search
+export const kbSearchSchema = z.object({
+  query: z.string().min(1).max(1000),
+});
+```
+
+---
+
+### New Files — Lib Helpers
+
+#### `src/lib/kb/storage.ts`
+
+Uses `createClient` from `@supabase/supabase-js` directly (not the SSR cookie client) with `SUPABASE_SERVICE_ROLE_KEY` — this is intentional: Storage operations in the processing pipeline run outside any user request context.
+
+- `signedUploadUrl(orgId, docId, ext)` → `{ uploadUrl: string, path: string }` where `path = "${orgId}/${docId}.${ext}"`. Upload URL is valid for 60 seconds. The docId is a UUID generated server-side to prevent path collisions.
+- `downloadFile(path)` → `Buffer`. Used by the processor to fetch the raw file bytes.
+- `deleteFile(path)` → `void`. Used by `DELETE /api/kb/docs` for Storage cleanup (best-effort; DB cascade handles chunks).
+
+#### `src/lib/kb/parse.ts`
+
+Wraps two extraction libraries:
+
+```ts
+// pdf-parse v2 — BREAKING CHANGE from v1: class-based API, not default-export function
+import { PDFParse } from "pdf-parse";
+export async function parsePdf(buffer: Buffer): Promise<string> {
+  const parser = new PDFParse({ data: new Uint8Array(buffer) });
+  const result = await parser.getText();
+  await parser.destroy();
+  return result.text.replace(/\f/g, " ").trim();
+}
+
+// mammoth: straightforward, extractRawText strips all DOCX markup
+export async function parseDocx(buffer: Buffer): Promise<string> {
+  const result = await mammoth.extractRawText({ buffer });
+  return result.value.trim();
+}
+```
+
+`parsePdf` converts the buffer to `Uint8Array` (required by v2), calls `.getText()` (async), calls `.destroy()` to release WASM memory, and strips form-feed characters (`\f`) that pdf-parse emits as page breaks.
+
+#### `src/lib/kb/chunk.ts`
+
+Sliding-window token chunker using tiktoken:
+
+```ts
+export async function chunkText(text: string): Promise<Chunk[]> {
+  const enc = get_encoding("cl100k_base");
+  try {
+    const tokens = enc.encode(text);
+    const chunks: Chunk[] = [];
+    let start = 0;
+    while (start < tokens.length) {
+      const end = Math.min(start + CHUNK_TOKENS, tokens.length);
+      const slice = tokens.slice(start, end);
+      if (slice.length >= MIN_CHUNK_TOKENS) {
+        chunks.push({
+          content: new TextDecoder().decode(enc.decode(slice)),
+          tokenCount: slice.length,
+          chunkIndex: chunks.length,
+        });
+      }
+      start += CHUNK_TOKENS - OVERLAP_TOKENS;
+    }
+    return chunks;
+  } finally {
+    enc.free(); // Release WASM memory
+  }
+}
+```
+
+Constants: `CHUNK_TOKENS = 1000`, `OVERLAP_TOKENS = 200`, `MIN_CHUNK_TOKENS = 50`. Skips trailing fragments under 50 tokens. `enc.free()` is called in a `finally` block to prevent WASM memory leaks in long-running serverless functions.
+
+#### `src/lib/kb/limits.ts`
+
+```ts
+export async function assertWithinLimit(
+  supabase: SupabaseClient<Database>,
+  orgId: string,
+  incomingBytes: number,
+) {
+  const [subResult, usageResult] = await Promise.all([
+    supabase.from("subscriptions").select("plan").eq("org_id", orgId).single(),
+    supabase
+      .from("knowledge_docs")
+      .select("file_size_bytes")
+      .eq("org_id", orgId)
+      .eq("status", "ready"),
+  ]);
+  const plan = (subResult.data?.plan ?? "free") as Plan;
+  const limitBytes = PLAN_LIMITS[plan].storageMb * 1024 * 1024;
+  const usedBytes = (usageResult.data ?? []).reduce((s, r) => s + (r.file_size_bytes ?? 0), 0);
+  if (usedBytes + incomingBytes > limitBytes) {
+    throw new ApiError(
+      "limit_reached",
+      `Storage limit reached. Used ${formatMb(usedBytes)} of ${formatMb(limitBytes)} MB.`,
+      429,
+    );
+  }
+}
+
+export function formatMb(bytes: number): string {
+  if (!isFinite(bytes)) return "∞ MB";
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+```
+
+Called twice per upload: once in `upload-url` (preflight, before the file even uploads) and once in `POST /api/kb/docs` (race protection, in case two parallel uploads both passed the first check). Uses `PLAN_LIMITS` from `src/types/index.ts`. Returns `"∞ MB"` for Enterprise plan (whose limit is `Infinity`).
+
+#### `src/lib/kb/process.ts`
+
+Nine-step processing pipeline. Called by `POST /api/kb/process`:
+
+```ts
+export async function processDoc(
+  docId: string,
+  fileType: string,
+  orgId: string,
+): Promise<void> {
+  const supabase = createServiceClient();
+  // 1. Fetch file_url from knowledge_docs
+  const { data: doc } = await supabase
+    .from("knowledge_docs").select("file_url").eq("id", docId).single();
+  // 2. Download file bytes from Storage
+  const buffer = await downloadFile(doc.file_url);
+  // 3. Parse text from PDF or DOCX
+  const text = fileType === "pdf" ? await parsePdf(buffer) : await parseDocx(buffer);
+  // 4. Chunk into 1000-token windows
+  const chunks = await chunkText(text);
+  // 5. Embed all chunks in parallel (batched to 100 per OpenAI call)
+  const embeddings = await embedBatch(chunks.map((c) => c.content));
+  // 6. Idempotency guard: delete any previous chunks for this doc
+  await supabase.from("doc_chunks").delete().eq("doc_id", docId);
+  // 7. Insert new chunks with embeddings
+  const rows = chunks.map((c, i) => ({
+    doc_id: docId, org_id: orgId,
+    content: c.content, token_count: c.tokenCount,
+    chunk_index: c.chunkIndex, embedding: embeddings[i],
+  }));
+  await supabase.from("doc_chunks").insert(rows);
+  // 8. Update doc status to 'ready'
+  const { error: updateError } = await supabase
+    .from("knowledge_docs").update({ status: "ready" }).eq("id", docId);
+  if (updateError) throw updateError;
+}
+```
+
+On any thrown error, the caller (`/api/kb/process`) catches and updates `status = 'failed'` with `error_message`. The idempotency guard in step 6 ensures retries are safe — chunks are always rebuilt fresh.
+
+---
+
+### New Files — API Routes
+
+#### `src/app/api/kb/upload-url/route.ts`
+
+`POST /api/kb/upload-url` — generates a Supabase Storage signed upload URL.
+
+Flow:
+1. `requireRole(["owner", "admin", "member"])`.
+2. Validate body with `kbUploadSchema` (name, size, type).
+3. `assertWithinLimit(supabase, orgId, body.size)` — preflight limit check; throws `429` if over.
+4. Generate `docId = crypto.randomUUID()`.
+5. `signedUploadUrl(orgId, docId, body.type)` → `{ uploadUrl, path }`.
+6. Return `ok({ uploadUrl, path, docId })`.
+
+The client uses this URL to PUT the file directly to Supabase Storage, then calls `POST /api/kb/docs` with the returned `{ docId, path }` to register the document.
+
+#### `src/app/api/kb/docs/route.ts`
+
+Three methods:
+
+**`GET /api/kb/docs`** — returns all documents for this org, ordered newest first.
+```ts
+.select("id, name, file_type, file_size_bytes, file_url, status, error_message, created_at")
+.eq("org_id", orgId)
+.order("created_at", { ascending: false })
+```
+
+**`POST /api/kb/docs`** — registers a document and triggers processing.
+1. Validate body with `kbDocsPostSchema`.
+2. `assertWithinLimit(supabase, orgId, body.size)` — race protection recheck.
+3. Insert into `knowledge_docs` with `status: "queued"`.
+4. Use `after(async () => { fetch /api/kb/process })` from `next/server` to trigger the processor after the response is flushed. `after()` keeps the serverless function alive long enough for the internal fetch to execute.
+5. Return `ok({ doc })`.
+
+**`DELETE /api/kb/docs?id=<uuid>`** — removes a document.
+1. `requireRole(["owner", "admin"])`.
+2. Fetch `file_url` to use for Storage cleanup.
+3. DELETE the `knowledge_docs` row (cascades to `doc_chunks` via FK).
+4. Best-effort `deleteFile(doc.file_url)` — logs error but doesn't fail the request.
+
+#### `src/app/api/kb/docs/[id]/route.ts`
+
+**`POST /api/kb/docs/[id]`** — retry a failed document (body: `{ action: "retry" }`).
+1. `requireRole(["owner", "admin", "member"])`.
+2. Validate body with `retrySchema`.
+3. UPDATE `knowledge_docs SET status='queued', error_message=null WHERE id=? AND org_id=? AND status='failed'`.
+4. Use `after(async () => { fetch /api/kb/process })` to re-trigger the processor.
+5. Return `ok(null)`.
+
+The `AND status='failed'` guard means idempotent retries on non-failed docs are silently ignored.
+
+#### `src/app/api/kb/docs/[id]/download/route.ts`
+
+**`GET /api/kb/docs/[id]/download`** — returns a 60-second signed download URL.
+1. `requireRole(["owner", "admin", "member"])`.
+2. Fetch `file_url` from DB, verifying `org_id` matches (defense in depth beyond RLS).
+3. `supabase.storage.from("documents").createSignedUrl(doc.file_url, 60)`.
+4. Return `ok({ url })`.
+
+Client opens the signed URL in a new tab to trigger the browser's download dialog.
+
+#### `src/app/api/kb/process/route.ts`
+
+**`POST /api/kb/process`** — dequeues and processes one document. Bearer `CRON_SECRET` auth required.
+
+```ts
+export const POST = async (req: Request) => {
+  const auth = req.headers.get("authorization");
+  if (auth !== `Bearer ${process.env.CRON_SECRET}`) return fail("unauthorized", ..., 401);
+
+  const supabase = createServiceClient();
+  const { data: claimed } = await supabase.rpc("claim_next_queued_doc");
+  if (!claimed?.length) return ok({ processed: null }); // Queue empty
+
+  const { id, file_type, org_id } = claimed[0];
+  try {
+    await processDoc(id, file_type, org_id);
+    return ok({ processed: id });
+  } catch (err) {
+    await supabase
+      .from("knowledge_docs")
+      .update({ status: "failed", error_message: String(err) })
+      .eq("id", id);
+    return ok({ processed: null });
+  }
+};
+```
+
+Returns `{ processed: <id> }` on success, `{ processed: null }` on empty queue or error. The cron loop uses `processed: null` as the stop signal.
+
+#### `src/app/api/cron/process-kb/route.ts`
+
+**`GET /api/cron/process-kb`** — Vercel cron endpoint. Runs every minute (see `vercel.json`).
+
+```ts
+for (let i = 0; i < 5; i++) {
+  try {
+    const res = await fetch(`${appUrl}/api/kb/process`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
+    });
+    if (!res.ok) { console.error(`[cron] process call returned ${res.status}`); break; }
+    const body = (await res.json()) as { data: { processed: string | null } };
+    if (!body.data?.processed) break;
+    count += 1;
+  } catch (err) {
+    console.error("[cron] process call failed", err);
+    break;
+  }
+}
+return ok({ processed: count });
+```
+
+Loops up to 5 times, processing one document per iteration. Breaks early on empty queue (`processed: null`), non-2xx response, or thrown error. Kept well under Vercel's 60-second cron limit. The `after()` trigger in `POST /api/kb/docs` is the primary mechanism; the cron is a safety net for any dropped triggers.
+
+#### `src/app/api/kb/search/route.ts`
+
+**`POST /api/kb/search`** — semantic search over this org's KB chunks. Restricted to owner/admin.
+
+1. `requireRole(["owner", "admin"])`.
+2. Validate body with `kbSearchSchema`.
+3. `embedText(body.query)` → 1536-dim vector.
+4. `supabase.rpc("match_doc_chunks", { query_embedding, match_count: 5 })` → top-5 chunks with similarity scores.
+5. Fetch doc names for each unique `doc_id` in one query.
+6. Return enriched results (chunk content + similarity + doc name).
+
+Used by the debug search page (`/kb/search`). Not in the main user flow — exposes raw KB retrieval for operators to validate embedding quality.
+
+---
+
+### New Files — UI Components
+
+#### `src/app/(dashboard)/kb/page.tsx`
+
+Server component. Reads session → `users(org_id, role)` → `knowledge_docs` (all columns) → `subscriptions(plan)`. Passes docs and `storageLimitMb` to `<KbClient>`. Renders:
+- `<h1>Knowledge Base</h1>` with description.
+- `<UsageMeter>` (hidden for Enterprise/Infinity plans).
+- `<KbClient docs={docs} storageLimitMb={storageLimitMb} canManage={role !== "member"} />`.
+- "Debug retrieval" link (`/kb/search`) shown to owner/admin only.
+
+#### `src/app/(dashboard)/kb/UsageMeter.tsx`
+
+Client component. Props: `usedBytes: number`, `limitMb: number`. Returns `null` if `limitMb === Infinity` (Enterprise). Calculates `pct = usedBytes / (limitMb * 1024 * 1024) * 100`. Renders a progress bar and `"X.X MB used of Y MB"` label. Bar turns red (`bg-red-500`) at ≥90% usage as a visual warning.
+
+#### `src/app/(dashboard)/kb/KbClient.tsx`
+
+Client component (`"use client"`). Owns the `docs` state array. Polls `GET /api/kb/docs` every 2 seconds while any document has `status === "queued"` or `status === "processing"`. Stops polling when all docs are settled.
+
+Exposes three callbacks:
+- `handleUploaded(doc)` — appends new doc to state and starts polling.
+- `handleRetried(id)` — sets `status: "queued"` on the matching doc and starts polling.
+- `handleDeleted(id)` — removes doc from state.
+
+Renders `<DropZone onUploaded={handleUploaded} />` and `<DocsTable docs={docs} onRetried={handleRetried} onDeleted={handleDeleted} canManage={canManage} />`.
+
+#### `src/app/(dashboard)/kb/DropZone.tsx`
+
+Client component. Handles multi-file drag-and-drop and click-to-upload with a 3-wide concurrency semaphore.
+
+Key implementation detail — uses **function declarations** (not `useCallback`) for `processQueue` and `enqueue` so they are hoisted and can reference each other recursively:
+
+```ts
+function processQueue() {
+  while (semaphore.current < MAX_CONCURRENT && queue.current.length > 0) {
+    semaphore.current += 1;
+    const file = queue.current.shift()!;
+    uploadFile(file).finally(() => {
+      semaphore.current -= 1;
+      processQueue(); // recursive call — safe because function declarations are hoisted
+    });
+  }
+}
+
+function enqueue(files: File[]) {
+  const valid = files.filter(validate);
+  queue.current.push(...valid);
+  processQueue();
+}
+```
+
+Client-side validation: rejects files >25 MB or with type other than `pdf`/`docx`. Upload sequence per file: `POST /api/kb/upload-url` → PUT to signed URL → `POST /api/kb/docs` → `onUploaded(doc)`.
+
+#### `src/app/(dashboard)/kb/DocsTable.tsx`
+
+Client component. Renders a `<Table>` with one row per document.
+
+Status badge colors:
+- `queued` → gray (`bg-gray-100 text-gray-700`)
+- `processing` → blue (`bg-blue-100 text-blue-700`)
+- `ready` → green (`bg-green-100 text-green-700`)
+- `failed` → red (`bg-red-100 text-red-700`)
+
+Row actions (right-aligned, conditional):
+- **Retry** — shown only for `status === "failed"` docs. Calls `POST /api/kb/docs/{id}` with `{ action: "retry" }`, then `onRetried(id)`.
+- **Download** — shown only for `status === "ready"` docs. Calls `GET /api/kb/docs/{id}/download`, opens `data.url` in a new tab.
+- **Delete** — shown only if `canManage`. Opens a confirmation `<Dialog>` before calling `DELETE /api/kb/docs?id={id}`, then `onDeleted(id)`.
+- **Details** — shown only for `status === "failed"` docs that have an `error_message`. Toggles an expandable row section showing the raw error.
+
+#### `src/app/(dashboard)/kb/search/page.tsx`
+
+Server component. Reads session → `users(role)`. Redirects to `/kb` if `role === "member"` (debug search is owner/admin only). Renders `<SearchForm />`.
+
+#### `src/app/(dashboard)/kb/search/SearchForm.tsx`
+
+Client component. Textarea for query input + Search button. On submit: `POST /api/kb/search`. Renders results as a list: doc name + similarity bar (percentage filled using `similarity * 100`) + content excerpt (first 500 characters). Shows "No results found" if the array is empty.
+
+---
+
+### Modified Files
+
+#### `src/types/database.ts`
+
+Replaced `Functions: Record<never, never>` with typed function definitions to enable type-safe `supabase.rpc()` calls:
+
+```ts
+Functions: {
+  match_doc_chunks: {
+    Args: { query_embedding: number[]; match_count?: number };
+    Returns: Array<{
+      id: string; doc_id: string; content: string;
+      token_count: number; chunk_index: number; similarity: number;
+    }>;
+  };
+  claim_next_queued_doc: {
+    Args: Record<PropertyKey, never>;
+    Returns: Array<{ id: string; file_type: string; org_id: string }>;
+  };
+  current_org_id: {
+    Args: Record<PropertyKey, never>;
+    Returns: string;
+  };
+};
+```
+
+#### `src/lib/ai/embeddings.ts`
+
+Replaced top-level `const openai = new OpenAI(...)` with lazy initialization to fix a build-time error:
+
+```ts
+// Before (broken at build time):
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// After (lazy — only instantiated on first real call):
+let cachedClient: OpenAI | null = null;
+function getClient(): OpenAI {
+  if (!cachedClient) cachedClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  return cachedClient;
+}
+```
+
+**Why:** During `next build`, Next.js evaluates module code to collect page data. When `OPENAI_API_KEY` is not set in the build environment, `new OpenAI({ apiKey: undefined })` throws immediately at module import time, aborting the build before any route is even compiled.
+
+#### `src/lib/ai/generate.ts`
+
+Same lazy initialization pattern applied to the Anthropic client:
+
+```ts
+let cachedClient: Anthropic | null = null;
+function getClient(): Anthropic {
+  if (!cachedClient) cachedClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return cachedClient;
+}
+```
+
+#### `next.config.ts`
+
+Added `serverExternalPackages` to prevent Turbopack from bundling WASM-dependent libraries:
+
+```ts
+const nextConfig: NextConfig = {
+  serverExternalPackages: ["tiktoken", "pdf-parse", "mammoth"],
+};
+```
+
+**Why:** Turbopack (used by `next dev` and `next build`) tried to bundle `tiktoken` into the route chunk, which broke WASM loading because the `.wasm` file path resolution relies on Node.js module resolution, not Webpack's asset pipeline. Same issue applies to `pdf-parse` and `mammoth` which both have native bindings. `serverExternalPackages` tells Next.js to keep these as external Node modules.
+
+#### `src/app/(dashboard)/dashboard/page.tsx`
+
+- Added "Knowledge Base" as the primary CTA button (`href="/kb"`).
+- Demoted "Organization settings" and "Invite teammates" to outline variant.
+- Updated placeholder description text to reflect the KB module being live.
+
+#### `vercel.json` (new file)
+
+```json
+{
+  "crons": [
+    {
+      "path": "/api/cron/process-kb",
+      "schedule": "* * * * *"
+    }
+  ]
+}
+```
+
+Runs the KB processing cron every minute on Vercel. Vercel cron invocations are GET requests; the route validates the `Authorization: Bearer <CRON_SECRET>` header.
+
+#### `.env.example` (updated)
+
+Added `CRON_SECRET=changeme`. Required by both `/api/kb/process` and `/api/cron/process-kb`. Should be set to a long random string in production.
+
+---
+
+### Bugs Fixed During Week 3
+
+#### Bug 1 — pdf-parse v2 breaking API change
+
+pdf-parse v2 (installed in Week 1) exports a `PDFParse` **class**, not a default-export function. The v1 API `const text = await pdfParse(buffer)` throws `TypeError: pdfParse is not a function` at runtime.
+
+**Fix** (`a982f2e`): Switched to the v2 class-based API:
+```ts
+// Before (v1 API — broken with v2 package):
+import pdfParse from "pdf-parse";
+const data = await pdfParse(buffer);
+return data.text;
+
+// After (v2 API):
+import { PDFParse } from "pdf-parse";
+const parser = new PDFParse({ data: new Uint8Array(buffer) });
+const result = await parser.getText();
+await parser.destroy();
+return result.text.replace(/\f/g, " ").trim();
+```
+
+#### Bug 2 — processDoc missing error guard on final UPDATE
+
+The initial `processDoc` implementation called `supabase.from("knowledge_docs").update({ status: "ready" })` without checking the return value. If this UPDATE failed (network error, RLS rejection), the doc would be permanently stuck in `status = 'processing'` state with chunks already inserted — invisible to the cron and unable to be retried by the user.
+
+**Fix** (`cb08a9f`):
+```ts
+const { error: updateError } = await supabase
+  .from("knowledge_docs").update({ status: "ready" }).eq("id", docId);
+if (updateError) throw updateError;
+```
+Throwing causes the process route to catch the error and set `status = 'failed'`, making it visible and retryable.
+
+#### Bug 3 — DropZone React Compiler "access before declaration" error
+
+`const processQueue = useCallback(() => { ... processQueue(); ... }, [])` — the recursive self-call inside the `.finally()` callback caused a `react-hooks/immutability` lint error: `Cannot access 'processQueue' before initialization`. `const` bindings are not hoisted; at the point `useCallback`'s closure is created, `processQueue` is in the temporal dead zone.
+
+**Fix** (`f751e19`): Changed `processQueue` and `enqueue` from `useCallback` arrow functions to plain **function declarations**. Function declarations are hoisted to the top of their enclosing scope, making the recursive self-reference safe:
+```ts
+// Before (broken):
+const processQueue = useCallback(() => { ... processQueue(); ... }, []);
+
+// After (works — function declaration is hoisted):
+function processQueue() { ... processQueue(); ... }
+```
+
+#### Bug 4 — Build failure: SDK instantiation at module top-level
+
+```
+Error: Next.js build failed — Cannot read properties of undefined (reading 'apiKey')
+```
+
+Both `src/lib/ai/embeddings.ts` and `src/lib/ai/generate.ts` instantiated their SDK clients at module top-level. During `next build`, Next.js imports these modules to collect page metadata. When `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` are not set in the build environment (CI, Vercel preview builds without env vars), the constructors throw immediately.
+
+**Fix** (`f751e19`): Lazy initialization pattern with a module-level cache variable. The SDK constructor is only called on the first actual API call, which happens at runtime when env vars are available. See Modified Files above for exact code.
+
+#### Bug 5 — Build failure: tiktoken WASM file not found
+
+```
+Error: Missing tiktoken_bg.wasm
+```
+
+Turbopack attempted to bundle `tiktoken` (and its WASM binary) into the route chunk. WASM loading in a bundled context requires special Webpack/Turbopack configuration that was not present; tiktoken relies on Node.js module resolution to find `tiktoken_bg.wasm`.
+
+**Fix** (`f751e19`): `serverExternalPackages: ["tiktoken", "pdf-parse", "mammoth"]` in `next.config.ts`. These packages are kept as external Node modules and loaded via `require()` at runtime, bypassing Turbopack's bundler entirely.
+
+#### Bug 6 — Fire-and-forget fetch unreliable on Vercel
+
+The initial `POST /api/kb/docs` and retry route used a plain fire-and-forget `.catch(() => {})` pattern to trigger the processor after sending the response. On Vercel serverless, the function runtime is frozen immediately after `return` — any async work that hasn't been awaited is silently dropped.
+
+**Fix** (`b29cecd`): Wrapped the trigger fetch in `after(async () => { ... })` from `next/server`. `after()` is specifically designed for post-response work on Vercel — it registers a callback that Vercel keeps the function alive for, separate from the response lifecycle.
+
+```ts
+// Before (dropped on Vercel):
+fetch(`${appUrl}/api/kb/process`, { ... }).catch(() => {});
+return ok({ doc });
+
+// After (reliable):
+after(async () => {
+  try {
+    await fetch(`${appUrl}/api/kb/process`, { ... });
+  } catch (err) {
+    console.error("[docs.post] process trigger failed", err);
+  }
+});
+return ok({ doc });
+```
+
+#### Bug 7 — Cron loop silent failure on non-2xx response
+
+The initial cron loop called `await res.json()` without first checking `res.ok`. A non-200 response (e.g., 500 from the process route) has a different JSON shape — the destructure `body.data?.processed` would be `undefined`, which matches the empty-queue stop condition. The cron would silently stop after one error instead of logging it.
+
+**Fix** (`b29cecd`): Added per-iteration try/catch and explicit `res.ok` check before JSON parsing:
+```ts
+if (!res.ok) {
+  console.error(`[cron] process call returned ${res.status}`);
+  break;
+}
+```
+
+---
+
+### Architecture Decisions
+
+| Decision | Reason |
+|---|---|
+| Two-phase upload (signed URL → register) | Files never touch the Next.js server process. Client PUTs directly to Supabase Storage, then calls the API to register the DB row. Keeps memory usage low and avoids multipart form parsing. |
+| `FOR UPDATE SKIP LOCKED` in `claim_next_queued_doc` | Two concurrent cron ticks (possible with 1-minute schedule + slow processing) cannot claim the same document. The `SKIP LOCKED` strategy returns immediately instead of waiting, matching queue-drain semantics. |
+| Idempotency guard (`DELETE doc_chunks WHERE doc_id=?` before INSERT) | Retries rebuild the chunk set from scratch. Without this, a partial first run would leave orphaned chunks alongside the new set, corrupting similarity search results. |
+| `after()` instead of fire-and-forget fetch | Vercel freezes serverless functions immediately after `return`. `after()` is the supported mechanism for post-response async work — it registers the callback with Vercel's infrastructure so it runs to completion. |
+| Cron as safety net, `after()` as primary trigger | `after()` processes documents within seconds of upload. The cron catches any dropped triggers (deploy restarts, cold starts, transient errors). Both mechanisms call the same idempotent `/api/kb/process` endpoint. |
+| `security definer` on `claim_next_queued_doc`, `security invoker` on `match_doc_chunks` | The cron runs as service_role (no auth context) — it cannot call `security invoker` functions that depend on `auth.uid()`. Conversely, `match_doc_chunks` must run as the caller so it inherits RLS and automatically filters to the current org. |
+| `REVOKE ... FROM PUBLIC` on `claim_next_queued_doc` | `security definer` functions run with elevated privileges. Restricting execution to `service_role` only prevents any authenticated user from invoking it and claiming (and stalling) documents from other orgs. |
+| Lazy SDK initialization | `next build` evaluates module code for page-data collection. Top-level SDK constructors throw when API keys are absent (CI/staging). Lazy init defers construction to first actual call at runtime. |
+| `serverExternalPackages` for tiktoken/pdf-parse/mammoth | All three have WASM or native bindings that cannot be bundled by Turbopack. Marking them external forces Node.js require() resolution at runtime, which correctly locates the binary assets. |
+| 3-wide upload semaphore (not unlimited, not 1) | Unlimited parallel uploads can exhaust signed-URL TTLs and create a thundering-herd on the process queue. Sequential (1 at a time) is too slow for bulk uploads. 3 is a balanced default matching common browser connection limits. |
+| Function declarations over `useCallback` for recursive queue functions | `const` bindings are not hoisted — recursive `useCallback` closures reference the variable before it is initialized. Function declarations are hoisted, making self-reference safe. This is a React Compiler strict-mode requirement. |
+| Plan limit checked at two points | The `upload-url` preflight stops obviously-over-limit uploads before the client wastes bandwidth. The `POST /api/kb/docs` recheck handles the race where two uploads started simultaneously and both passed the first check. |
+
+---
+
+### Complete Route Table (Week 3 — new routes only)
+
+| Method | Route | File | Minimum role |
+|---|---|---|---|
+| POST | `/api/kb/upload-url` | `src/app/api/kb/upload-url/route.ts` | Member |
+| GET | `/api/kb/docs` | `src/app/api/kb/docs/route.ts` | Member |
+| POST | `/api/kb/docs` | `src/app/api/kb/docs/route.ts` | Member |
+| DELETE | `/api/kb/docs` | `src/app/api/kb/docs/route.ts` | Owner / Admin |
+| POST | `/api/kb/docs/[id]` | `src/app/api/kb/docs/[id]/route.ts` | Member |
+| GET | `/api/kb/docs/[id]/download` | `src/app/api/kb/docs/[id]/download/route.ts` | Member |
+| POST | `/api/kb/process` | `src/app/api/kb/process/route.ts` | CRON_SECRET |
+| GET | `/api/cron/process-kb` | `src/app/api/cron/process-kb/route.ts` | CRON_SECRET |
+| POST | `/api/kb/search` | `src/app/api/kb/search/route.ts` | Owner / Admin |
+| GET | `/kb` | `src/app/(dashboard)/kb/page.tsx` | Member |
+| GET | `/kb/search` | `src/app/(dashboard)/kb/search/page.tsx` | Owner / Admin |
+
+---
+
+### Complete File Index — Week 3
+
+**Created:**
+- `supabase/migrations/003_kb_storage.sql`
+- `src/lib/schemas/kb.ts`
+- `src/lib/kb/storage.ts`
+- `src/lib/kb/parse.ts`
+- `src/lib/kb/chunk.ts`
+- `src/lib/kb/limits.ts`
+- `src/lib/kb/process.ts`
+- `src/app/api/kb/upload-url/route.ts`
+- `src/app/api/kb/docs/route.ts`
+- `src/app/api/kb/docs/[id]/route.ts`
+- `src/app/api/kb/docs/[id]/download/route.ts`
+- `src/app/api/kb/process/route.ts`
+- `src/app/api/cron/process-kb/route.ts`
+- `src/app/api/kb/search/route.ts`
+- `src/app/(dashboard)/kb/page.tsx`
+- `src/app/(dashboard)/kb/UsageMeter.tsx`
+- `src/app/(dashboard)/kb/KbClient.tsx`
+- `src/app/(dashboard)/kb/DropZone.tsx`
+- `src/app/(dashboard)/kb/DocsTable.tsx`
+- `src/app/(dashboard)/kb/search/page.tsx`
+- `src/app/(dashboard)/kb/search/SearchForm.tsx`
+- `vercel.json`
+
+**Modified:**
+- `src/types/database.ts` — added `match_doc_chunks`, `claim_next_queued_doc`, `current_org_id` function types
+- `src/lib/ai/embeddings.ts` — lazy OpenAI client initialization
+- `src/lib/ai/generate.ts` — lazy Anthropic client initialization
+- `next.config.ts` — added `serverExternalPackages` for WASM libraries
+- `src/app/(dashboard)/dashboard/page.tsx` — added KB link, updated CTAs
+- `.env.example` — added `CRON_SECRET`
+
+---
+
+### Manual Setup Steps (Week 3)
+
+These steps must be completed manually; they are not automated by the codebase:
+
+1. **Apply migration** — run `003_kb_storage.sql` in the Supabase SQL Editor (project > SQL Editor > New query).
+2. **Create Storage bucket** — in Supabase Studio go to Storage → New bucket → name it `documents` → set to **Private** (not public).
+3. **Apply Storage RLS policies** — run the three `CREATE POLICY` statements from the migration file in the SQL Editor against `storage.objects`.
+4. **Set `CRON_SECRET`** — add a long random string (e.g., `openssl rand -hex 32`) to `.env.local` and to Vercel environment variables. Without this, both the cron and the internal process trigger will return 401.
+
+---
+
+### New Environment Variables (Week 3)
+
+| Variable | Used by | Notes |
+|---|---|---|
+| `CRON_SECRET` | `src/app/api/kb/process/route.ts`, `src/app/api/cron/process-kb/route.ts` | Required. Any string, but should be a long random value in production. Set in both `.env.local` and Vercel dashboard. |
+
+All other variables used in Week 3 (`OPENAI_API_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_APP_URL`) were already required in previous weeks.
+
+---
+
+### Open Issues / Deferred Items
+
+| Item | Deferred to |
+|---|---|
+| Playwright/Vitest integration tests for KB flows | Later sprint (user decision) |
+| Streaming upload progress bar in DropZone | Currently shows a spinner per file; byte-level progress would require `XMLHttpRequest` instead of `fetch`. Deferred. |
+| Full-document re-indexing on org plan upgrade | Currently only new uploads are indexed. Documents uploaded under a lower storage limit are not re-indexed when the plan upgrades. Deferred to billing/admin tooling. |
+
+---
+
+*Next: Week 4 — RFP Projects module*
+
+---
+
 ## [Week 2 — Auth & Org Module] 2026-05-01
 
 **Branch:** `feature/auth-and-org` → PR into `develop`
