@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { after } from "next/server";
 import { withErrorHandling, ok, fail } from "@/lib/api";
 import { requireRole } from "@/lib/auth/requireRole";
 
@@ -20,12 +21,18 @@ export const POST = withErrorHandling(async (req, ctx) => {
 
   if (error) throw error;
 
-  // Re-trigger the processor
+  // Re-trigger the processor after the response is sent.
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  fetch(`${appUrl}/api/kb/process`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
-  }).catch(() => {});
+  after(async () => {
+    try {
+      await fetch(`${appUrl}/api/kb/process`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
+      });
+    } catch (err) {
+      console.error("[docs.retry] process trigger failed", err);
+    }
+  });
 
   return ok(null);
 });

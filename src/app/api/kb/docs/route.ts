@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import { withErrorHandling, ok, fail } from "@/lib/api";
 import { requireRole } from "@/lib/auth/requireRole";
 import { kbDocsPostSchema } from "@/lib/schemas/kb";
@@ -36,13 +37,19 @@ export const POST = withErrorHandling(async (req) => {
     .single();
   if (error || !doc) throw error ?? new Error("insert_failed");
 
-  // Fire-and-forget: trigger the processor immediately without awaiting
+  // Trigger the processor after the response is sent. `after()` keeps the
+  // serverless function alive long enough for the fetch to actually fire.
+  // The cron is still a safety net if this throws.
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
-  fetch(`${appUrl}/api/kb/process`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
-  }).catch(() => {
-    // Ignore — Vercel Cron is the safety net if this call fails
+  after(async () => {
+    try {
+      await fetch(`${appUrl}/api/kb/process`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
+      });
+    } catch (err) {
+      console.error("[docs.post] process trigger failed", err);
+    }
   });
 
   return ok({ doc });

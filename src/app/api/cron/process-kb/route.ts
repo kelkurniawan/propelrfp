@@ -12,13 +12,22 @@ export async function GET(req: Request) {
   // Loop up to 5 times — each iteration processes one document.
   // Breaking early when the queue is empty keeps us well under the 60s limit.
   for (let i = 0; i < 5; i++) {
-    const res = await fetch(`${appUrl}/api/kb/process`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
-    });
-    const body = (await res.json()) as { data: { processed: string | null } };
-    if (!body.data?.processed) break;
-    count += 1;
+    try {
+      const res = await fetch(`${appUrl}/api/kb/process`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${process.env.CRON_SECRET}` },
+      });
+      if (!res.ok) {
+        console.error(`[cron] process call returned ${res.status}`);
+        break;
+      }
+      const body = (await res.json()) as { data: { processed: string | null } };
+      if (!body.data?.processed) break;
+      count += 1;
+    } catch (err) {
+      console.error("[cron] process call failed", err);
+      break;
+    }
   }
 
   return ok({ processed: count });
