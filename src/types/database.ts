@@ -379,7 +379,33 @@ export interface Database {
       };
     };
     Views: Record<never, never>;
-    Functions: Record<never, never>;
+    Functions: {
+      current_org_id: {
+        Args: Record<never, never>;
+        Returns: string;
+      };
+      match_doc_chunks: {
+        Args: {
+          query_embedding: number[];
+          match_count?: number;
+        };
+        Returns: {
+          id: string;
+          doc_id: string;
+          content: string;
+          chunk_index: number;
+          similarity: number;
+        }[];
+      };
+      claim_next_queued_doc: {
+        Args: Record<never, never>;
+        Returns: {
+          id: string;
+          file_type: string;
+          org_id: string;
+        }[];
+      };
+    };
     Enums: Record<never, never>;
     CompositeTypes: Record<never, never>;
   };
