@@ -29,15 +29,17 @@ export default async function DashboardPage() {
         Welcome to {org?.name ?? "your workspace"}.
       </h1>
       <p className="mt-2 text-muted-foreground">
-        Knowledge Base lands next week. In the meantime, set up your team and review your
-        organization details.
+        Upload past proposals to your Knowledge Base to power AI-generated RFP responses.
       </p>
       <div className="mt-8 flex flex-wrap gap-3">
+        <Link href="/kb">
+          <Button>Knowledge Base</Button>
+        </Link>
         <Link href="/settings/org">
           <Button variant="outline">Organization settings</Button>
         </Link>
         <Link href="/settings/members">
-          <Button>Invite teammates</Button>
+          <Button variant="outline">Invite teammates</Button>
         </Link>
       </div>
     </main>
