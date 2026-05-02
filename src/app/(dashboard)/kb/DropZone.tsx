@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 
 const MAX_BYTES = 25 * 1024 * 1024; // 25 MB
@@ -35,7 +35,6 @@ export function DropZone({ onUploaded }: { onUploaded: (doc: DocRow) => void }) 
   const queue = useRef<File[]>([]);
 
   async function uploadFile(file: File, type: "pdf" | "docx") {
-    // 1. Get signed upload URL + docId
     const urlRes = await fetch("/api/kb/upload-url", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -49,7 +48,6 @@ export function DropZone({ onUploaded }: { onUploaded: (doc: DocRow) => void }) 
       path: string;
     };
 
-    // 2. PUT directly to Supabase Storage
     const putRes = await fetch(uploadUrl, {
       method: "PUT",
       headers: { "Content-Type": file.type || "application/octet-stream" },
@@ -57,7 +55,6 @@ export function DropZone({ onUploaded }: { onUploaded: (doc: DocRow) => void }) 
     });
     if (!putRes.ok) throw new Error("Storage upload failed");
 
-    // 3. Register the doc row
     const docsRes = await fetch("/api/kb/docs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -69,7 +66,7 @@ export function DropZone({ onUploaded }: { onUploaded: (doc: DocRow) => void }) 
     return docsJson.data.doc as DocRow;
   }
 
-  const processQueue = useCallback(() => {
+  function processQueue() {
     while (queue.current.length > 0 && semaphore.current < 3) {
       const file = queue.current.shift()!;
       const type = getFileType(file)!;
@@ -88,9 +85,9 @@ export function DropZone({ onUploaded }: { onUploaded: (doc: DocRow) => void }) 
           processQueue();
         });
     }
-  }, [onUploaded]);
+  }
 
-  const enqueue = useCallback((files: FileList | File[]) => {
+  function enqueue(files: FileList | File[]) {
     for (const file of Array.from(files)) {
       if (file.size > MAX_BYTES) {
         toast.error(`${file.name}: exceeds 25 MB limit`);
@@ -103,13 +100,7 @@ export function DropZone({ onUploaded }: { onUploaded: (doc: DocRow) => void }) 
       queue.current.push(file);
     }
     processQueue();
-  }, [processQueue]);
-
-  const onDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setDragging(false);
-    enqueue(e.dataTransfer.files);
-  }, [enqueue]);
+  }
 
   return (
     <div
@@ -118,7 +109,11 @@ export function DropZone({ onUploaded }: { onUploaded: (doc: DocRow) => void }) 
         setDragging(true);
       }}
       onDragLeave={() => setDragging(false)}
-      onDrop={onDrop}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        enqueue(e.dataTransfer.files);
+      }}
       onClick={() => inputRef.current?.click()}
       className={`cursor-pointer rounded-lg border-2 border-dashed p-10 text-center transition-colors ${
         dragging ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
