@@ -59,8 +59,9 @@ export async function processDoc(
   if (insertError) throw insertError;
 
   // Mark document as ready
-  await supabase
+  const { error: updateError } = await supabase
     .from("knowledge_docs")
     .update({ status: "ready" })
     .eq("id", docId);
+  if (updateError) throw updateError;
 }
