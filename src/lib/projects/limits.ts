@@ -1,17 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
 import { PLAN_LIMITS } from "@/types/index";
-
-export class ProposalLimitError extends Error {
-  constructor(
-    public code: string,
-    public message: string,
-    public status: number
-  ) {
-    super(message);
-    this.name = "ProposalLimitError";
-  }
-}
+import { ApiError } from "@/lib/errors";
 
 export async function assertProposalLimit(
   supabase: SupabaseClient<Database>,
@@ -24,18 +14,14 @@ export async function assertProposalLimit(
     .single();
 
   if (error || !sub) {
-    throw new ProposalLimitError(
-      "internal_error",
-      "Could not retrieve subscription",
-      500
-    );
+    throw new ApiError("internal_error", "Could not retrieve subscription", 500);
   }
 
   const limit =
     PLAN_LIMITS[sub.plan as keyof typeof PLAN_LIMITS]?.proposals ?? 10;
 
   if (sub.proposals_used >= limit) {
-    throw new ProposalLimitError(
+    throw new ApiError(
       "limit_reached",
       `Proposal limit reached. Used ${sub.proposals_used} of ${limit} this cycle. Upgrade to create more proposals.`,
       429
