@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
 import { PLAN_LIMITS } from "@/types/index";
-import { ApiError } from "@/lib/errors";
+import { ApiError } from "@/lib/auth/requireRole";
 
 export async function assertProposalLimit(
   supabase: SupabaseClient<Database>,
