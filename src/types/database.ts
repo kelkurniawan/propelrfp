@@ -201,6 +201,7 @@ export interface Database {
           client_name: string | null;
           deadline: string | null;
           notes: string | null;
+          rfp_raw_text: string | null;
           status: "draft" | "in_review" | "submitted" | "won" | "lost";
           created_at: string;
           updated_at: string;
@@ -212,6 +213,7 @@ export interface Database {
           client_name?: string | null;
           deadline?: string | null;
           notes?: string | null;
+          rfp_raw_text?: string | null;
           status?: "draft" | "in_review" | "submitted" | "won" | "lost";
           created_at?: string;
           updated_at?: string;
@@ -223,6 +225,7 @@ export interface Database {
           client_name?: string | null;
           deadline?: string | null;
           notes?: string | null;
+          rfp_raw_text?: string | null;
           status?: "draft" | "in_review" | "submitted" | "won" | "lost";
           created_at?: string;
           updated_at?: string;
