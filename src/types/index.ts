@@ -11,8 +11,11 @@ export type DocChunk = Tables<"doc_chunks">;
 export type RfpProject = Tables<"rfp_projects">;
 export type RfpSection = Tables<"rfp_sections">;
 export type GenLog = Tables<"gen_logs">;
+export type Invitation = Tables<"invitations">;
 
 export type UserRole = "owner" | "admin" | "member";
+export type InvitationStatus = "pending" | "accepted" | "revoked" | "expired";
+export type InviteRole = "admin" | "member";
 export type DocStatus = "queued" | "processing" | "ready" | "failed";
 export type ProjectStatus = "draft" | "in_review" | "submitted" | "won" | "lost";
 export type SectionStatus = "pending" | "generating" | "generated" | "approved";

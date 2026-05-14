@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { ZodError } from "zod";
+import { ApiError } from "@/lib/auth/requireRole";
 import type { ApiResponse } from "@/types";
 
 export function ok<T>(data: T, status = 200): NextResponse<ApiResponse<T>> {
@@ -17,3 +19,29 @@ export const ApiErrors = {
   LimitReached: (message: string) => fail("limit_reached", message, 429),
   InternalError: () => fail("internal_error", "Something went wrong", 500),
 } as const;
+
+export function withErrorHandling(
+  handler: (
+    req: Request,
+    ctx: { params: Promise<Record<string, string>> }
+  ) => Promise<NextResponse>
+) {
+  return async (
+    req: Request,
+    ctx: { params: Promise<Record<string, string>> }
+  ): Promise<NextResponse> => {
+    try {
+      return await handler(req, ctx);
+    } catch (err) {
+      if (err instanceof ZodError) {
+        const msg = err.issues.map((i) => i.message).join(", ");
+        return fail("validation_failed", msg, 400);
+      }
+      if (err instanceof ApiError) {
+        return fail(err.code, err.message, err.status);
+      }
+      console.error("[api] unhandled error", err);
+      return ApiErrors.InternalError();
+    }
+  };
+}

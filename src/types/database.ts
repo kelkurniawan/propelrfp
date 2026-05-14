@@ -328,9 +328,87 @@ export interface Database {
           },
         ];
       };
+      invitations: {
+        Row: {
+          id: string;
+          org_id: string;
+          email: string;
+          role: "admin" | "member";
+          token: string;
+          invited_by: string;
+          status: "pending" | "accepted" | "revoked" | "expired";
+          expires_at: string;
+          created_at: string;
+          accepted_at: string | null;
+        };
+        Insert: {
+          id?: string;
+          org_id: string;
+          email: string;
+          role?: "admin" | "member";
+          token?: string;
+          invited_by: string;
+          status?: "pending" | "accepted" | "revoked" | "expired";
+          expires_at?: string;
+          created_at?: string;
+          accepted_at?: string | null;
+        };
+        Update: {
+          id?: string;
+          org_id?: string;
+          email?: string;
+          role?: "admin" | "member";
+          token?: string;
+          invited_by?: string;
+          status?: "pending" | "accepted" | "revoked" | "expired";
+          expires_at?: string;
+          created_at?: string;
+          accepted_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "invitations_org_id_fkey";
+            columns: ["org_id"];
+            referencedRelation: "organizations";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "invitations_invited_by_fkey";
+            columns: ["invited_by"];
+            referencedRelation: "users";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
     };
     Views: Record<never, never>;
-    Functions: Record<never, never>;
+    Functions: {
+      current_org_id: {
+        Args: Record<never, never>;
+        Returns: string;
+      };
+      match_doc_chunks: {
+        Args: {
+          query_embedding: number[];
+          match_count?: number;
+        };
+        Returns: {
+          id: string;
+          doc_id: string;
+          content: string;
+          chunk_index: number;
+          similarity: number;
+        }[];
+      };
+      claim_next_queued_doc: {
+        Args: Record<never, never>;
+        Returns: {
+          id: string;
+          file_type: string;
+          org_id: string;
+        }[];
+      };
+    };
     Enums: Record<never, never>;
     CompositeTypes: Record<never, never>;
   };
