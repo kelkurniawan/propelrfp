@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import {
   DndContext,
@@ -40,6 +40,10 @@ function SortableRow({
     useSortable({ id: section.id });
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(section.title);
+
+  useEffect(() => {
+    if (!editing) setDraft(section.title);
+  }, [section.title, editing]);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -122,7 +126,9 @@ export function SectionList({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const sensors = useSensors(useSensor(PointerSensor));
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 8 } })
+  );
 
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event;
