@@ -24,7 +24,7 @@ export type Plan = "free" | "starter" | "growth" | "enterprise";
 
 export interface ApiResponse<T> {
   data: T | null;
-  error: { code: string; message: string } | null;
+  error: { code: string; message: string; [key: string]: unknown } | null;
 }
 
 export const PLAN_LIMITS = {
