@@ -71,7 +71,7 @@ export interface Database {
           stripe_customer_id: string | null;
           stripe_subscription_id: string | null;
           status: "active" | "past_due" | "canceled" | "trialing";
-          plan: "starter" | "growth" | "enterprise";
+          plan: "free" | "starter" | "growth" | "enterprise";
           current_period_start: string | null;
           current_period_end: string | null;
           proposals_used: number;
@@ -83,7 +83,7 @@ export interface Database {
           stripe_customer_id?: string | null;
           stripe_subscription_id?: string | null;
           status?: "active" | "past_due" | "canceled" | "trialing";
-          plan?: "starter" | "growth" | "enterprise";
+          plan?: "free" | "starter" | "growth" | "enterprise";
           current_period_start?: string | null;
           current_period_end?: string | null;
           proposals_used?: number;
@@ -95,7 +95,7 @@ export interface Database {
           stripe_customer_id?: string | null;
           stripe_subscription_id?: string | null;
           status?: "active" | "past_due" | "canceled" | "trialing";
-          plan?: "starter" | "growth" | "enterprise";
+          plan?: "free" | "starter" | "growth" | "enterprise";
           current_period_start?: string | null;
           current_period_end?: string | null;
           proposals_used?: number;

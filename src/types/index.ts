@@ -20,7 +20,7 @@ export type DocStatus = "queued" | "processing" | "ready" | "failed";
 export type ProjectStatus = "draft" | "in_review" | "submitted" | "won" | "lost";
 export type SectionStatus = "pending" | "generating" | "generated" | "approved";
 export type SubscriptionStatus = "active" | "past_due" | "canceled" | "trialing";
-export type Plan = "starter" | "growth" | "enterprise";
+export type Plan = "free" | "starter" | "growth" | "enterprise";
 
 export interface ApiResponse<T> {
   data: T | null;
@@ -28,6 +28,7 @@ export interface ApiResponse<T> {
 }
 
 export const PLAN_LIMITS = {
+  free: { proposals: 3, storageMb: 250, users: 1 },
   starter: { proposals: 10, storageMb: 500, users: 1 },
   growth: { proposals: Infinity, storageMb: 5120, users: 5 },
   enterprise: { proposals: Infinity, storageMb: Infinity, users: Infinity },
