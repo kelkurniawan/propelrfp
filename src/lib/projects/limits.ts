@@ -28,16 +28,28 @@ export async function assertProposalLimit(
     );
   }
 
-  return sub.proposals_used;
+  return limit;
 }
 
-export async function incrementProposalsUsed(
+export async function atomicIncrementProposals(
   supabase: SupabaseClient<Database>,
   orgId: string,
-  currentCount: number
+  limit: number
 ): Promise<void> {
-  await supabase
-    .from("subscriptions")
-    .update({ proposals_used: currentCount + 1 })
-    .eq("org_id", orgId);
+  const { data: newCount, error } = await supabase.rpc(
+    "increment_proposals_if_under_limit",
+    { p_org_id: orgId, p_limit: limit }
+  );
+
+  if (error) {
+    throw new ApiError("internal_error", "Could not update proposal count", 500);
+  }
+
+  if (newCount === -1) {
+    throw new ApiError(
+      "limit_reached",
+      "Proposal limit reached. Upgrade to create more proposals.",
+      429
+    );
+  }
 }

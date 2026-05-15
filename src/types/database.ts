@@ -408,6 +408,10 @@ export interface Database {
           org_id: string;
         }[];
       };
+      increment_proposals_if_under_limit: {
+        Args: { p_org_id: string; p_limit: number };
+        Returns: number;
+      };
     };
     Enums: Record<never, never>;
     CompositeTypes: Record<never, never>;

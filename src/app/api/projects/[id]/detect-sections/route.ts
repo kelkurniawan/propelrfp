@@ -32,10 +32,11 @@ export const POST = withErrorHandling(async (req, ctx) => {
   }
 
   if (rfpText && rfpText !== project.rfp_raw_text) {
-    await supabase
+    const { error: updateError } = await supabase
       .from("rfp_projects")
       .update({ rfp_raw_text: rfpText })
       .eq("id", id);
+    if (updateError) throw updateError;
   }
 
   const detected = await detectSections(textToDetect);

@@ -16,10 +16,18 @@ export default async function ProjectPage({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
+  const { data: me } = await supabase
+    .from("users")
+    .select("org_id")
+    .eq("id", user.id)
+    .single();
+  if (!me) redirect("/signup/org");
+
   const { data: project, error } = await supabase
     .from("rfp_projects")
     .select("id, title, status, rfp_sections(id, title, status, position)")
     .eq("id", id)
+    .eq("org_id", me.org_id)
     .order("position", { ascending: true, referencedTable: "rfp_sections" })
     .single();
 

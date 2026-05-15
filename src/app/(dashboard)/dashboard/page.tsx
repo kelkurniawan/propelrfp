@@ -41,11 +41,10 @@ export default async function DashboardPage() {
   const rawProjects = (projectsResult.data ?? []) as unknown as ProjectRow[];
   const kbDocCount = kbResult.count ?? 0;
 
-  const projects = rawProjects.map((p) => ({
+  const projects = rawProjects.map(({ rfp_sections, ...p }) => ({
     ...p,
-    rfp_sections: undefined,
-    section_count: p.rfp_sections?.length ?? 0,
-    approved_count: (p.rfp_sections ?? []).filter((s) => s.status === "approved").length,
+    section_count: rfp_sections?.length ?? 0,
+    approved_count: (rfp_sections ?? []).filter((s) => s.status === "approved").length,
   }));
 
   const activeProposals = projects.filter(

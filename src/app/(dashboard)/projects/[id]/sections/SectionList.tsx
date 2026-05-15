@@ -153,7 +153,7 @@ export function SectionList({
 
   function handleAddSection() {
     const newSection: SectionDraft = {
-      id: `new-${Date.now()}`,
+      id: `new-${crypto.randomUUID()}`,
       title: "New section",
       rfp_content: null,
     };

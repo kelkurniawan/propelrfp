@@ -1,7 +1,7 @@
 import { withErrorHandling, ok } from "@/lib/api";
 import { requireRole } from "@/lib/auth/requireRole";
 import { createProjectSchema } from "@/lib/schemas/projects";
-import { assertProposalLimit, incrementProposalsUsed } from "@/lib/projects/limits";
+import { assertProposalLimit, atomicIncrementProposals } from "@/lib/projects/limits";
 import { detectSections } from "@/lib/ai/generate";
 
 export const GET = withErrorHandling(async () => {
@@ -32,7 +32,7 @@ export const POST = withErrorHandling(async (req) => {
   const { orgId, supabase } = await requireRole(["owner", "admin", "member"]);
   const body = createProjectSchema.parse(await req.json());
 
-  const currentCount = await assertProposalLimit(supabase, orgId);
+  const planLimit = await assertProposalLimit(supabase, orgId);
 
   const { data: project, error: insertError } = await supabase
     .from("rfp_projects")
@@ -51,24 +51,28 @@ export const POST = withErrorHandling(async (req) => {
 
   let sections: unknown[] = [];
   if (body.rfp_text) {
-    const detected = await detectSections(body.rfp_text);
-    if (detected.length > 0) {
-      const rows = detected.map((s, i) => ({
-        project_id: project.id,
-        title: s.title,
-        rfp_content: s.rfp_content ?? null,
-        position: i,
-      }));
-      const { data: insertedSections, error: sectionsError } = await supabase
-        .from("rfp_sections")
-        .insert(rows)
-        .select();
-      if (sectionsError) throw sectionsError;
-      sections = insertedSections ?? [];
+    try {
+      const detected = await detectSections(body.rfp_text);
+      if (detected.length > 0) {
+        const rows = detected.map((s, i) => ({
+          project_id: project.id,
+          title: s.title,
+          rfp_content: s.rfp_content ?? null,
+          position: i,
+        }));
+        const { data: insertedSections, error: sectionsError } = await supabase
+          .from("rfp_sections")
+          .insert(rows)
+          .select();
+        if (sectionsError) throw sectionsError;
+        sections = insertedSections ?? [];
+      }
+    } catch {
+      // AI detection failure: project is still created, sections can be added manually
     }
   }
 
-  await incrementProposalsUsed(supabase, orgId, currentCount);
+  await atomicIncrementProposals(supabase, orgId, planLimit);
 
   return ok({ project, sections }, 201);
 });
