@@ -10,6 +10,12 @@ function getAdminClient() {
   );
 }
 
+function planFromSubscription(subscription: Stripe.Subscription): "starter" | "growth" {
+  const priceId = subscription.items?.data?.[0]?.price?.id;
+  if (priceId && priceId === process.env.STRIPE_GROWTH_PRICE_ID) return "growth";
+  return "starter";
+}
+
 export async function verifyWebhookSignature(
   body: string,
   signature: string
@@ -23,7 +29,6 @@ export async function handleSubscriptionUpsert(subscription: Stripe.Subscription
 
   const supabase = getAdminClient();
 
-  // In Stripe SDK v22+, billing cycle dates live on the subscription item
   const item = subscription.items?.data?.[0];
   const periodStart = item?.current_period_start
     ? new Date(item.current_period_start * 1000).toISOString()
@@ -38,7 +43,7 @@ export async function handleSubscriptionUpsert(subscription: Stripe.Subscription
       stripe_customer_id: subscription.customer as string,
       stripe_subscription_id: subscription.id,
       status: subscription.status as Database["public"]["Tables"]["subscriptions"]["Row"]["status"],
-      plan: "starter" as const,
+      plan: planFromSubscription(subscription),
       current_period_start: periodStart,
       current_period_end: periodEnd,
     },
@@ -52,5 +57,8 @@ export async function handleSubscriptionDeleted(subscription: Stripe.Subscriptio
 
   const supabase = getAdminClient();
 
-  await supabase.from("subscriptions").update({ status: "canceled" }).eq("org_id", orgId);
+  await supabase
+    .from("subscriptions")
+    .update({ status: "canceled", plan: "free" })
+    .eq("org_id", orgId);
 }
