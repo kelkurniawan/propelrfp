@@ -18,8 +18,14 @@ export function ProjectForm() {
     setLoading(true);
 
     const fd = new FormData(e.currentTarget);
+    const title = fd.get("title");
+    if (typeof title !== "string" || !title.trim()) {
+      setError("Project title is required.");
+      setLoading(false);
+      return;
+    }
     const body = {
-      title: fd.get("title") as string,
+      title,
       client_name: (fd.get("client_name") as string) || null,
       deadline: (fd.get("deadline") as string) || null,
       notes: (fd.get("notes") as string) || null,
@@ -32,14 +38,17 @@ export function ProjectForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const json = await res.json();
+      const json = await res.json() as {
+        data: { project: { id: string }; sections: unknown[] } | null;
+        error: { code: string; message: string } | null;
+      };
 
       if (!res.ok || json.error) {
         setError(json.error?.message ?? "Something went wrong");
         return;
       }
 
-      const { project } = json.data as { project: { id: string }; sections: unknown[] };
+      const { project } = json.data!;
 
       if (body.rfp_text) {
         router.push(`/projects/${project.id}/sections`);
