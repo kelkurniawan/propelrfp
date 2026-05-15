@@ -55,25 +55,40 @@ export async function POST(
     });
     const kbChunks = (chunks ?? []).map((c) => c.content);
 
-    const { data: org } = await supabase
+    const { data: org, error: orgError } = await supabase
       .from("organizations")
       .select("name, industry")
       .eq("id", orgId)
       .single();
 
-    await supabase
+    if (orgError || !org) {
+      throw new ApiError("internal_error", "Organization not found", 500);
+    }
+
+    const { error: updateError } = await supabase
       .from("rfp_sections")
       .update({ status: "generating", updated_at: new Date().toISOString() })
       .eq("id", sid);
 
-    const stream = await generateSectionStream({
-      orgName: org?.name ?? "",
-      industry: org?.industry ?? "General",
-      kbChunks,
-      sectionTitle: section.title,
-      rfpContent: section.rfp_content ?? "",
-      customInstruction: custom_instruction ?? undefined,
-    });
+    if (updateError) throw updateError;
+
+    let stream: ReadableStream<Uint8Array>;
+    try {
+      stream = await generateSectionStream({
+        orgName: org.name,
+        industry: org.industry ?? "General",
+        kbChunks,
+        sectionTitle: section.title,
+        rfpContent: section.rfp_content ?? "",
+        customInstruction: custom_instruction ?? undefined,
+      });
+    } catch (genErr) {
+      await supabase
+        .from("rfp_sections")
+        .update({ status: "pending", updated_at: new Date().toISOString() })
+        .eq("id", sid);
+      throw genErr;
+    }
 
     return new Response(stream, {
       headers: { "Content-Type": "text/plain; charset=utf-8" },
