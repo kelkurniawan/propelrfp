@@ -1,11 +1,5 @@
-import {
-  Document,
-  Packer,
-  Paragraph,
-  TextRun,
-  HeadingLevel,
-  UnderlineType,
-} from "docx";
+import { Document, Packer, Paragraph, TextRun, HeadingLevel } from "docx";
+import type { UnderlineType } from "docx";
 
 export interface ExportSection {
   title: string;
@@ -95,8 +89,10 @@ function blocksToParagraphs(nodes: NodeList): Paragraph[] {
         break;
       case "PRE": {
         const code = el.querySelector("code");
-        const text = code?.textContent ?? el.textContent ?? "";
-        text.split("\n").forEach((line) => {
+        const raw = code?.textContent ?? el.textContent ?? "";
+        const lines = raw.split("\n");
+        if (lines[lines.length - 1] === "") lines.pop();
+        lines.forEach((line) => {
           result.push(
             new Paragraph({
               children: [new TextRun({ text: line, font: { name: "Courier New" } })],
@@ -128,12 +124,13 @@ function inlineRuns(el: Element | Node, inherited: RunStyle = {}): TextRun[] {
       if (text) runs.push(new TextRun({ text, ...inherited }));
       return;
     }
+    if (child.nodeType !== Node.ELEMENT_NODE) return;
     const c = child as Element;
     const style: RunStyle = { ...inherited };
     switch (c.tagName?.toUpperCase()) {
       case "STRONG": case "B": style.bold = true; break;
       case "EM": case "I": style.italics = true; break;
-      case "U": style.underline = {}; break;
+      case "U": style.underline = { type: "single" }; break;
       case "S": case "DEL": style.strike = true; break;
       case "CODE": style.font = { name: "Courier New" }; break;
     }
