@@ -38,7 +38,10 @@ export function withErrorHandling(
         return fail("validation_failed", msg, 400);
       }
       if (err instanceof ApiError) {
-        return fail(err.code, err.message, err.status);
+        return NextResponse.json(
+          { data: null, error: { code: err.code, message: err.message, ...err.extra } },
+          { status: err.status }
+        );
       }
       console.error("[api] unhandled error", err);
       return ApiErrors.InternalError();
