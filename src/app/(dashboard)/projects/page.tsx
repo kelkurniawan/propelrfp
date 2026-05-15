@@ -5,9 +5,7 @@ import { Button } from "@/components/ui/button";
 import { ProjectsTable } from "@/app/(dashboard)/dashboard/ProjectsTable";
 import type { RfpProject } from "@/types";
 
-interface ProjectRow extends RfpProject {
-  rfp_sections: { status: string }[];
-}
+type ProjectRow = RfpProject & { rfp_sections: { status: string }[] };
 
 export default async function ProjectsPage() {
   const supabase = await createClient();
@@ -24,17 +22,21 @@ export default async function ProjectsPage() {
     .single();
   if (!me) redirect("/signup/org");
 
-  const { data: rawProjects } = await supabase
+  const { data: rawProjects, error: projectsError } = await supabase
     .from("rfp_projects")
     .select("*, rfp_sections(status)")
     .eq("org_id", me.org_id)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .returns<ProjectRow[]>();
 
-  const projects = (rawProjects as unknown as ProjectRow[] ?? []).map((p) => ({
+  if (projectsError) {
+    throw new Error("Failed to load projects");
+  }
+
+  const projects = (rawProjects ?? []).map(({ rfp_sections, ...p }) => ({
     ...p,
-    rfp_sections: undefined,
-    section_count: p.rfp_sections?.length ?? 0,
-    approved_count: (p.rfp_sections ?? []).filter((s) => s.status === "approved").length,
+    section_count: rfp_sections?.length ?? 0,
+    approved_count: (rfp_sections ?? []).filter((s) => s.status === "approved").length,
   }));
 
   return (
