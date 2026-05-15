@@ -1,7 +1,7 @@
 -- supabase/migrations/006_free_plan.sql
 
 -- Widen the plan check constraint to include 'free'
-ALTER TABLE subscriptions DROP CONSTRAINT subscriptions_plan_check;
+ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_plan_check;
 ALTER TABLE subscriptions
   ADD CONSTRAINT subscriptions_plan_check
   CHECK (plan IN ('free', 'starter', 'growth', 'enterprise'));
