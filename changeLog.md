@@ -5,6 +5,654 @@ Format: `[Week N — Phase] Date` → grouped by file, with what changed and why
 
 ---
 
+## [Week 6 — Review & Editor Completion] 2026-05-16
+
+**Branch:** `feature/rfp-projects`
+**Build status:** `pnpm tsc --noEmit` clean. `pnpm lint` 0 errors (3 pre-existing warnings). Merged to `develop`.
+
+**Commits (oldest → newest):**
+
+| SHA       | Message                                                                                                                      |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `2675c49` | `chore(deps): add @tiptap/extension-underline`                                                                               |
+| `5d9cfff` | `feat(export): add HTML-to-docx converter utility`                                                                           |
+| `7fa7752` | `fix(export): guard non-element nodes in inlineRuns, fix PRE trailing line, use type import for UnderlineType`               |
+| `b98617f` | `feat(export): add ExportButton client component`                                                                            |
+| `d532291` | `feat(editor): add TiptapEditor with StarterKit + Underline and fixed toolbar`                                               |
+| `b815739` | `feat(editor): replace textarea with TiptapEditor in SectionPanel`                                                          |
+| `6935549` | `feat(projects): add inline status dropdown and DOCX export button to proposals list`                                        |
+| `c44aaf3` | `fix: address final review — UnderlineType value import, prev guard, editable on approved, editor skeleton`                  |
+
+---
+
+### Overview
+
+Week 6 completed Module 5 (Review & Editor) by upgrading the plain `<textarea>` to a Tiptap v3 rich-text editor, adding client-side DOCX export from the proposals list, and wiring up the `ProjectStatus` state machine with an inline editable dropdown. The design spec lives at `docs/superpowers/specs/2026-05-16-week6-editor-export-design.md` and the implementation plan at `docs/superpowers/plans/2026-05-16-week6-editor-export.md`.
+
+---
+
+### New Dependencies Added in Week 6
+
+```bash
+pnpm add @tiptap/extension-underline
+```
+
+`@tiptap/react`, `@tiptap/starter-kit`, `docx`, and `file-saver` were already installed. `@tiptap/extension-underline` was the only missing package.
+
+---
+
+### New Files
+
+#### `src/lib/export/docx.ts`
+
+Pure browser-only utility — no React, no API calls.
+
+```ts
+export interface ExportSection {
+  title: string;
+  final_content: string | null;
+  ai_draft: string | null;
+  position: number;
+}
+
+export async function buildProposalDocx(
+  projectTitle: string,
+  sections: ExportSection[]
+): Promise<Blob>
+```
+
+**Document structure:** Project title → `HEADING_1`; each section title → `HEADING_2`; content → parsed paragraphs. Sections sorted by `position`; sections with no `final_content` and no `ai_draft` are skipped.
+
+**HTML parsing** uses browser `DOMParser` to walk Tiptap's HTML output:
+- `<p>` → `Paragraph`
+- `<h1/h2/h3>` → `Paragraph` with `HeadingLevel.HEADING_1/2/3`
+- `<ul><li>` → `Paragraph` with `bullet: { level: 0 }`
+- `<ol><li>` → `Paragraph` with text prefix `1. `, `2. `, etc.
+- `<blockquote>` → `Paragraph` with `indent: { left: 720 }`
+- `<pre><code>` → one `Paragraph` per line, monospace font (`Courier New`)
+- Inline: `<strong/b>` → bold, `<em/i>` → italics, `<u>` → underline (`UnderlineType.SINGLE`), `<s/del>` → strike, `<code>` inline → `Courier New`
+- Plain text (no leading `<`) → split on `\n`, each non-empty line → `Paragraph`
+
+Returns `Packer.toBlob(doc)` from `docx` v9.
+
+**Key fixes applied during review:**
+- `import type { UnderlineType }` changed back to value import; `type: "single"` changed to `type: UnderlineType.SINGLE`
+- `inlineRuns`: added `if (child.nodeType !== Node.ELEMENT_NODE) return` guard before casting to `Element`
+- `PRE` block: trailing empty string from `text.split("\n")` is popped before iterating
+
+---
+
+#### `src/app/(dashboard)/projects/ExportButton.tsx`
+
+Client component (`"use client"`). Props: `{ projectId: string; projectTitle: string }`.
+
+On click:
+1. Sets `loading = true` (button shows "Exporting…", disabled)
+2. `GET /api/projects/${projectId}/sections`
+3. Filters to `status === "approved"`, sorts by `position`
+4. `buildProposalDocx(projectTitle, approved)` → `saveAs(blob, sanitizedTitle.docx)` via `file-saver`
+5. `finally`: `loading = false`
+
+On error: `toast.error(message)` via sonner. Filename sanitised: `projectTitle.replace(/[^a-z0-9]/gi, "_")`.
+
+---
+
+#### `src/app/(dashboard)/projects/[id]/TiptapEditor.tsx`
+
+Client component (`"use client"`). Props: `{ content: string; editable: boolean; onChange: (html: string) => void }`.
+
+Extensions: `StarterKit.configure({ heading: { levels: [1, 2, 3] }, underline: false })` + separate `Underline` extension (`underline: false` in StarterKit avoids a duplicate-extension conflict in Tiptap v3). `immediatelyRender: false` (prevents SSR hydration warnings and makes return type `Editor | null`).
+
+**Backward compatibility:** `normalizeContent()` wraps plain text in `<p>` if content doesn't start with `<`, transparent for existing plain-text `final_content` values.
+
+**Fixed toolbar** renders 5 groups separated by `|` dividers:
+`H1 · H2 · H3 | B · I · U · S | • · 1. | ❝ · </> | ↩ · ↪`
+
+Active mark/node at cursor highlights the button (`bg-primary text-primary-foreground`). Undo/Redo never show as active.
+
+**Skeleton:** While `editor === null` (first render tick), a height-preserving skeleton div (toolbar height + `min-h-[200px]` body) is rendered instead of `null` to prevent layout shift.
+
+---
+
+### Modified Files
+
+#### `src/app/(dashboard)/projects/[id]/SectionPanel.tsx`
+
+Replaced `<textarea>` with `<TiptapEditor>`. Three-way conditional:
+
+```tsx
+{!hasContent && !isStreaming ? (
+  // unchanged "Click Generate" placeholder
+) : isStreaming ? (
+  <div className="...overflow-y-auto">{displayText}</div>
+) : (
+  <TiptapEditor
+    content={section.final_content ?? section.ai_draft ?? ""}
+    editable={section.status !== "approved"}
+    onChange={onDraftChange}
+  />
+)}
+```
+
+`TiptapEditor` is only mounted when `!isStreaming` — avoids `setContent()` on every streamed chunk. `editable={section.status !== "approved"}` locks the editor once a section is approved, preventing silent post-approval content changes.
+
+---
+
+#### `src/app/(dashboard)/dashboard/ProjectsTable.tsx`
+
+Two new features added to each project row:
+
+**Inline status dropdown (replaces read-only badge):**
+```tsx
+<select
+  value={p.status}
+  onChange={(e) => handleStatusChange(p.id, e.target.value as ProjectStatus)}
+  className={`... ${STATUS_COLORS[p.status]}`}
+>
+  {(Object.keys(STATUS_LABELS) as ProjectStatus[]).map((s) => (
+    <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+  ))}
+</select>
+```
+
+`handleStatusChange`: optimistic update → `PUT /api/projects/[id]` with `{ status }` → revert + `toast.error` on `!res.ok`. Guards against `prev === undefined` with an early return.
+
+`STATUS_COLORS`: `draft` → gray, `in_review` → blue, `submitted` → yellow, `won` → green, `lost` → red.
+
+**Export column:**
+```tsx
+{allApproved ? (
+  <ExportButton projectId={p.id} projectTitle={p.title} />
+) : (
+  <div className="w-16 shrink-0" />  // spacer keeps row alignment
+)}
+```
+
+`allApproved = section_count > 0 && approved_count === section_count`. The `w-16` spacer prevents other columns from shifting when the button is absent.
+
+---
+
+### Key Decisions & Notes
+
+| Decision | Reason |
+|---|---|
+| `StarterKit.configure({ underline: false })` | Tiptap v3 bundles `@tiptap/extension-underline` inside StarterKit. Registering the separate `Underline` extension without this flag causes a duplicate-extension runtime error. |
+| `immediatelyRender: false` | Next.js SSR renders the component on the server where the editor cannot initialise. This flag tells Tiptap to skip the initial render, preventing hydration mismatches. |
+| Client-side DOCX generation (no API route) | The `docx` and `file-saver` packages are already installed and browser-only. A server route would add latency, require streaming the blob back, and consume Vercel function compute for a task the browser handles natively. |
+| `editable={section.status !== "approved"}` | Without this, editing an approved section fires `onDraftChange` → debounce save → `PUT .../sections/[sid]`, silently overwriting the approved content. Locking the editor after approval enforces the intended state machine. |
+| Sanitised DOCX filename | `projectTitle.replace(/[^a-z0-9]/gi, "_")` prevents invalid characters in the filename (e.g., `/`, `:`, `?`) from breaking the download on Windows and macOS. |
+
+---
+
+*Next: Week 7 — Billing & Limits module*
+
+---
+
+## [Week 5 — AI Generation Engine + Editor UI] 2026-05-15
+
+**Branch:** `feature/rfp-projects`
+**Build status:** `pnpm tsc --noEmit` clean. `pnpm lint` 0 errors (3 pre-existing warnings). Merged to `develop`.
+
+**Commits (oldest → newest):**
+
+| SHA       | Message                                                                                          |
+| --------- | ------------------------------------------------------------------------------------------------ |
+| `015f566` | `feat(schema): add genLog Zod schema`                                                            |
+| `76e67d8` | `feat(api): add POST /api/gen-logs route`                                                        |
+| `7ed0234` | `feat(api): add POST .../sections/[sid]/generate streaming route`                                |
+| `b405687` | `fix(api): status rollback, org guard, update error check in generate route`                     |
+| `4f6111b` | `feat(editor): add shared SectionDraft type`                                                     |
+| `69b683d` | `feat(editor): add SectionSidebar component`                                                     |
+| `470cd5f` | `feat(editor): add SectionPanel component`                                                       |
+| `9329c66` | `feat(editor): add EditorShell client state component`                                           |
+| `5e66f41` | `fix(editor): fix lost saves on section switch, missing generating status, reader leak`          |
+| `7a7cad8` | `feat(editor): replace placeholder page with EditorShell`                                        |
+| `bf1db63` | `fix(editor): remove console.error, sync model name via X-Model response header`                 |
+| `19281ba` | `fix(sections): reset draft on edit open instead of useEffect setState`                          |
+
+---
+
+### Overview
+
+Week 5 delivered the complete AI generation pipeline and the side-by-side editor UI. The RAG pipeline embeds each section's RFP text, retrieves the top-5 knowledge base chunks (pgvector cosine search), streams a Claude API response into the browser, and saves the draft on each debounced change. The design spec lives at `docs/superpowers/specs/2026-05-15-week5-ai-editor-design.md` and the plan at `docs/superpowers/plans/2026-05-15-week5-ai-editor.md`.
+
+---
+
+### New Files — API Routes
+
+#### `src/app/api/gen-logs/route.ts`
+
+| Method | Auth     | Behaviour |
+|--------|----------|-----------|
+| `POST` | any role | Validates with `genLogSchema` (`{ project_id, section_id, model, prompt_tokens, completion_tokens, org_id }`). Inserts to `gen_logs`. Returns `{ data: log }` with 201. |
+
+#### `src/app/api/projects/[id]/sections/[sid]/generate/route.ts`
+
+Streaming route — bare `Response` (not `NextResponse`), manual try/catch. Full RAG flow:
+
+1. `requireRole(["owner","admin","member"])` + org-scope project lookup
+2. Fetch section `rfp_content`
+3. `embedText(rfp_content)` via OpenAI `text-embedding-3-small`
+4. `matchDocChunks(embedding, orgId, 5)` — pgvector cosine search
+5. Build system prompt (org name, industry, KB chunks, section text)
+6. `anthropic.messages.stream({ model: MODEL, max_tokens: 4096, ... })` — Claude API stream
+7. Stream `text_delta` events as plain text chunks via `ReadableStream`
+8. On stream end: update `rfp_sections.ai_draft` + set `status = "draft"` + POST to `/api/gen-logs`
+
+Response headers: `Content-Type: text/plain; charset=utf-8`, `X-Model: claude-sonnet-4-5`.
+
+**Key fixes applied during review:**
+- `status` update (`"generating"` → `"draft"`) wrapped in try/catch so a failed DB update doesn't crash the stream
+- Added `org_id` guard on section lookup (belt-and-suspenders alongside RLS)
+- Removed `console.error` (violates CLAUDE.md); errors propagate through existing catch chain
+- `MODEL` exported from `generate.ts` and returned as `X-Model` header so the client always knows the actual model used
+
+---
+
+### New Files — Zod Schemas
+
+#### `src/lib/schemas/genLog.ts`
+
+```ts
+export const genLogSchema = z.object({
+  project_id: z.string().uuid(),
+  section_id: z.string().uuid(),
+  model: z.string().min(1),
+  prompt_tokens: z.number().int().min(0),
+  completion_tokens: z.number().int().min(0),
+  org_id: z.string().uuid(),
+});
+```
+
+---
+
+### New Files — Editor UI Components
+
+#### `src/app/(dashboard)/projects/[id]/types.ts`
+
+Shared type file for the editor shell:
+
+```ts
+export type SectionStatus = "pending" | "generating" | "generated" | "approved";
+
+export interface SectionDraft {
+  id: string;
+  title: string;
+  rfp_content: string | null;
+  ai_draft: string | null;
+  final_content: string | null;
+  status: SectionStatus;
+  position: number;
+}
+```
+
+#### `src/app/(dashboard)/projects/[id]/SectionSidebar.tsx`
+
+Client component. Renders the vertical section list on the left side of the editor. Props: `{ sections: SectionDraft[]; activeId: string | null; onSelect: (id: string) => void }`.
+
+Each item shows the section title, a colored status dot (gray=pending, amber=generating, blue=generated, green=approved), and highlights the active section. Clicking fires `onSelect`.
+
+#### `src/app/(dashboard)/projects/[id]/SectionPanel.tsx`
+
+Client component. Renders the right panel for the selected section. Props: section data, streaming state, save state, event callbacks.
+
+Layout: header (title + status badge + Generate/Approve buttons) | optional custom instruction input | optional error banner | side-by-side RFP requirement (read-only) + draft editor (was `<textarea>`, replaced by `TiptapEditor` in Week 6).
+
+**Generate flow:** "Add instruction" toggle → optional freetext → `onGenerate(instruction?)`. Button disabled while streaming. "Regenerate" shown if content exists.
+
+**Save indicator:** `SaveIndicator` sub-component renders `"● Saving…"` / `"● Saved"` / `"⚠ Save failed"` based on `savedState` prop.
+
+#### `src/app/(dashboard)/projects/[id]/EditorShell.tsx`
+
+Client component (`"use client"`). The stateful coordinator for the entire editor page. Props: `{ projectId, projectTitle, sections: SectionDraft[] }`.
+
+**State:**
+- `sections: SectionDraft[]` — local copy for optimistic status updates
+- `activeId: string | null` — currently selected section
+- `streamingText: string` — accumulated streamed text for display
+- `isStreaming: boolean` — true while a stream is in-flight
+- `savedState` — `"idle" | "saving" | "saved" | "error"` for the save indicator
+- `streamError: string | null`
+- `saveTimersRef: Map<string, ReturnType<typeof setTimeout>>` — per-section debounce timers (fixed: was a single shared ref that cleared saves on section switch)
+
+**Generate flow:**
+1. Sets section status to `"generating"` optimistically in local state
+2. `POST .../sections/${sid}/generate` with optional custom instruction
+3. Reads `X-Model` header (`fallback: "claude-sonnet-4-5"`)
+4. Streams `text_delta` into `streamingText`
+5. On finish: sets `streamingText` as `ai_draft` in local state, status → `"generated"`, logs token usage to `/api/gen-logs`
+6. On error: resets status to previous value, sets `streamError`
+7. `reader.releaseLock()` in `finally` block (fixes stream lock leak)
+
+**Debounce save flow:**
+`onDraftChange(text)` → sets `saveTimersRef.get(sectionId)` to a 1500 ms timer → `PUT .../sections/${sid}` with `{ final_content: text }` → `savedState = "saved"`.
+
+---
+
+### Modified Files
+
+#### `src/lib/ai/generate.ts`
+
+Added `export const MODEL = "claude-sonnet-4-5"` (was unexported `const`). Consumed by the generate route for the `X-Model` header.
+
+#### `src/app/(dashboard)/projects/[id]/page.tsx`
+
+Replaced the Week 4 placeholder with a full server component: fetches project + sections (org-scoped), then renders `<EditorShell projectId={id} projectTitle={project.title} sections={sections ?? []} />`.
+
+#### `src/app/(dashboard)/projects/[id]/sections/SectionList.tsx`
+
+Fixed: removed a `useEffect` that was calling `setDraft(section.title)` synchronously, triggering a React lint error (`setState` on every render). Instead, `draft` is reset in the `onClick` handler when the user starts editing.
+
+---
+
+### Key Decisions & Notes
+
+| Decision | Reason |
+|---|---|
+| `saveTimersRef: Map<string, timer>` instead of single ref | A single `useRef<timer>` was cleared when the user switched sections, silently discarding in-flight saves. Keying timers by `sectionId` ensures each section debounces independently. |
+| `setStatus("generating")` before fetch, not after | The user sees immediate UI feedback (amber "Generating…" badge) without waiting for the network round-trip. |
+| `reader.releaseLock()` in `finally` | If `reader.read()` throws mid-stream (e.g., network abort), the stream stays locked forever. `finally` ensures the lock is always released so the `ReadableStream` can be GC'd. |
+| `X-Model` response header | Exporting `MODEL` from `generate.ts` and echoing it as a header means the client never needs its own copy of the model name — if the model changes on the server, the client adapts automatically. |
+| Bare `Response` in streaming route | `NextResponse` does not support streaming in the same way. `new Response(stream, { headers })` is the App Router idiomatic pattern for SSE / chunked streaming. |
+
+---
+
+*Next: Week 6 — Rich Editor, DOCX Export & Project Status*
+
+---
+
+## [Week 4 — RFP Projects Module] 2026-05-15
+
+**Branch:** `feature/rfp-projects`
+**Build status:** `pnpm build` passes clean. 32 routes compiled successfully.
+
+**Commits (oldest → newest):**
+
+| SHA       | Message                                                                                     |
+| --------- | ------------------------------------------------------------------------------------------- |
+| `9ad4c42` | `chore(deps): add @dnd-kit/core, sortable, utilities for drag-to-reorder`                  |
+| `a16880c` | `feat(db): add rfp_raw_text column to rfp_projects`                                        |
+| `c6a1eed` | `feat(schemas): add project and section Zod schemas`                                       |
+| `570b46e` | `feat(projects): add proposal limit check and increment helper`                            |
+| `d615597` | `fix(projects): use ApiError instead of custom error class in limits helper`               |
+| `a0fde3c` | `chore: merge feature/auth-and-org — resolve package.json conflict (keep dnd-kit + auth deps)` |
+| `db3caf5` | `fix(projects): import ApiError from @/lib/auth/requireRole, remove spurious errors.ts`   |
+| `7e84d79` | `feat(api): add GET /api/projects and POST /api/projects with section detection`           |
+| `15142b5` | `feat(api): add GET/PUT/DELETE /api/projects/[id]`                                         |
+| `ea82936` | `feat(api): add sections CRUD and bulk-replace endpoints`                                  |
+| `9c4570c` | `feat(api): add POST /api/projects/[id]/detect-sections`                                   |
+| `6215d44` | `feat(ui): update dashboard with stats cards and projects table`                           |
+| `7c2b216` | `feat(ui): add /projects list page`                                                        |
+| `0094940` | `fix(ui): apply type-safe fixes to projects list page`                                     |
+| `e096147` | `feat(ui): add new project page with RFP text input`                                       |
+| `1989410` | `fix(ui): type-safe form response, title guard, alias import in new project page`          |
+| `5e189c2` | `feat(ui): add project detail placeholder page (editor shell for Module 5)`                |
+| `a3927c1` | `fix(ui): surface real DB errors vs not-found in project detail page`                      |
+| `7b438e7` | `feat(ui): add section review page with drag-to-reorder and confirm`                       |
+| `16cde98` | `fix(ui): sensor activation distance and stale draft sync in SectionList`                  |
+| `22e0a8b` | `fix: final review fixes — org_id guards, atomic limit increment, error boundary, minor improvements` |
+
+---
+
+### Overview
+
+Week 4 delivered the complete RFP Projects module: project CRUD with plan-based proposal limits, AI-powered section detection (Claude API via existing `detectSections()`), a section review UI with drag-to-reorder, inline rename, and a bulk-replace confirm step, plus a revamped dashboard with live stats cards. The implementation plan lives at `docs/superpowers/plans/2026-05-15-week4-rfp-projects.md`. 9 new API routes, 2 DB migrations, and 10 new/modified UI files were added across 21 commits.
+
+---
+
+### New Migrations
+
+#### `supabase/migrations/004_rfp_raw_text.sql`
+
+**Must be applied manually in Supabase SQL Editor:**
+
+```sql
+alter table rfp_projects add column if not exists rfp_raw_text text;
+```
+
+Adds a `TEXT` column to `rfp_projects` to cache the raw RFP text pasted by the user. Used by `POST /api/projects` (initial detection) and `POST /api/projects/[id]/detect-sections` (re-detection without re-pasting).
+
+---
+
+#### `supabase/migrations/005_atomic_proposal_increment.sql`
+
+**Must be applied manually in Supabase SQL Editor:**
+
+```sql
+create or replace function increment_proposals_if_under_limit(
+  p_org_id uuid,
+  p_limit int
+) returns int language plpgsql security definer as $$
+declare
+  v_new_count int;
+begin
+  update subscriptions
+     set proposals_used = proposals_used + 1
+   where org_id = p_org_id
+     and proposals_used < p_limit
+  returning proposals_used into v_new_count;
+
+  if v_new_count is null then
+    return -1;
+  end if;
+
+  return v_new_count;
+end;
+$$;
+```
+
+Replaces the previous read-then-write pattern (`assertProposalLimit` + `incrementProposalsUsed`) with an atomic conditional increment. Returns `-1` if the limit has already been reached, preventing a race condition where two concurrent `POST /api/projects` requests from the same org could both pass the limit check and over-provision.
+
+---
+
+### New Dependencies Added in Week 4
+
+```bash
+pnpm add @dnd-kit/core @dnd-kit/sortable @dnd-kit/utilities
+```
+
+Used in `SectionList.tsx` for drag-to-reorder sections. `PointerSensor` with `activationConstraint: { distance: 8 }` is used to prevent accidental drag initiation on tap.
+
+---
+
+### New Files — Zod Schemas
+
+#### `src/lib/schemas/projects.ts`
+
+```ts
+export const createProjectSchema = z.object({
+  title: z.string().min(1).max(200),
+  client_name: z.string().max(200).nullish(),
+  deadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+  notes: z.string().max(5000).nullish(),
+  rfp_text: z.string().max(200_000).nullish(),
+});
+
+export const updateProjectSchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  client_name: z.string().max(200).nullish(),
+  deadline: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullish(),
+  notes: z.string().max(5000).nullish(),
+  status: z.enum(["draft", "in_review", "submitted", "won", "lost"]).optional(),
+});
+
+export const createSectionSchema = z.object({
+  title: z.string().min(1).max(500),
+  rfp_content: z.string().max(50_000).nullish(),
+  position: z.number().int().min(0),
+});
+
+export const updateSectionSchema = z.object({
+  title: z.string().min(1).max(500).optional(),
+  rfp_content: z.string().max(50_000).nullish(),
+  position: z.number().int().min(0).optional(),
+  ai_draft: z.string().max(200_000).nullish(),
+  final_content: z.string().max(200_000).nullish(),
+  status: z.enum(["pending", "generating", "generated", "approved"]).optional(),
+});
+
+export const bulkSectionsSchema = z.object({
+  sections: z.array(z.object({
+    title: z.string().min(1).max(500),
+    rfp_content: z.string().max(50_000).nullish(),
+    position: z.number().int().min(0),
+  })).min(1),
+});
+
+export const detectSectionsBodySchema = z.object({
+  rfp_text: z.string().min(1).max(200_000),
+});
+```
+
+---
+
+### New Files — Helpers
+
+#### `src/lib/projects/limits.ts`
+
+```ts
+// assertProposalLimit — reads subscription, throws ApiError(429) if at limit.
+// Returns the plan limit (used by atomicIncrementProposals).
+export async function assertProposalLimit(supabase, orgId): Promise<number>
+
+// atomicIncrementProposals — calls increment_proposals_if_under_limit RPC.
+// Throws ApiError(429) if RPC returns -1 (limit hit by a concurrent request).
+export async function atomicIncrementProposals(supabase, orgId, limit): Promise<void>
+```
+
+`PLAN_LIMITS` is read from `@/types/index`. Starter: 10 proposals/cycle; growth/enterprise: `Infinity`.
+
+---
+
+### New Files — API Routes
+
+#### `src/app/api/projects/route.ts`
+
+| Method | Auth | Behaviour |
+|--------|------|-----------|
+| `GET`  | any role | Returns all org projects with `section_count` + `approved_count` (computed from nested `rfp_sections(status)` select). Ordered by `created_at DESC`. |
+| `POST` | any role | Limit check → insert project → `detectSections()` if `rfp_text` provided (wrapped in try/catch so AI failure doesn't block project creation) → `atomicIncrementProposals`. Returns `{ project, sections }` with 201. |
+
+#### `src/app/api/projects/[id]/route.ts`
+
+| Method   | Auth             | Behaviour |
+|----------|------------------|-----------|
+| `GET`    | any role         | Fetches project + `rfp_sections(*)` ordered by `position`. Returns 404 if not found or wrong org. |
+| `PUT`    | any role         | Validates with `updateProjectSchema`, sets `updated_at`. Returns updated project. |
+| `DELETE` | owner/admin only | Deletes project. `requireRole(["owner","admin"])` enforces permission. |
+
+#### `src/app/api/projects/[id]/sections/route.ts`
+
+| Method | Auth     | Behaviour |
+|--------|----------|-----------|
+| `GET`  | any role | Verifies project ownership, returns sections ordered by `position`. |
+| `POST` | any role | Verifies project ownership, inserts single section, returns 201. |
+
+#### `src/app/api/projects/[id]/sections/[sid]/route.ts`
+
+| Method   | Auth     | Behaviour |
+|----------|----------|-----------|
+| `PUT`    | any role | Verifies project ownership, updates section + `updated_at`. |
+| `DELETE` | any role | Verifies project ownership, deletes section by `id` + `project_id`. |
+
+#### `src/app/api/projects/[id]/sections/bulk/route.ts`
+
+| Method | Auth     | Behaviour |
+|--------|----------|-----------|
+| `POST` | any role | Atomic bulk-replace: `DELETE` all sections for project, then `INSERT` the new ordered set. Used by the section review "Confirm" step. Accepts `{ sections: [{ title, rfp_content, position }] }`. |
+
+#### `src/app/api/projects/[id]/detect-sections/route.ts`
+
+| Method | Auth     | Behaviour |
+|--------|----------|-----------|
+| `POST` | any role | Accepts optional `rfp_text` body; falls back to `project.rfp_raw_text`. Updates `rfp_raw_text` if new text provided (error checked). Runs `detectSections()`, bulk-replaces sections. Returns `{ project_id, sections }`. |
+
+**Key invariant:** `rfp_sections` has no `org_id` column. Tenant isolation is enforced by joining through `project_id → rfp_projects.org_id`. All section routes first verify the project belongs to the requesting org.
+
+---
+
+### New Files — UI Pages & Components
+
+#### `src/app/(dashboard)/dashboard/StatsCards.tsx`
+
+Server component. Accepts `{ activeProposals, kbDocCount, winRate, timeSavedHours }`. Renders 4 stat cards in a 2×2 / 4×1 responsive grid. `winRate === null` renders `"—"` (no closed deals yet).
+
+#### `src/app/(dashboard)/dashboard/ProjectsTable.tsx`
+
+Client component (`"use client"`). Accepts `projects: Array<RfpProject & { section_count: number; approved_count: number }>`. Features:
+- Radix `<Select>` filter by status (all/draft/in_review/submitted/won/lost).
+- Empty state with 4-step onboarding list + "Create first proposal" CTA → `/projects/new`.
+- Table rows: title link, client name, colored status badge, deadline, progress bar (green at 100%, blue otherwise), Open button.
+
+#### `src/app/(dashboard)/dashboard/page.tsx` *(modified)*
+
+Replaced stub. Now fetches `rfp_projects + rfp_sections(status)` and `knowledge_docs` count in parallel. Computes `activeProposals`, `winRate` (null if no closed deals), `timeSavedHours` (approved sections × 2.5). Renders `StatsCards` + `ProjectsTable`. Uses destructuring (`{ rfp_sections, ...p }`) to omit the nested relation from the spread.
+
+#### `src/app/(dashboard)/projects/page.tsx`
+
+Server component. Same data-fetch pattern as dashboard (org-scoped, with `rfp_sections(status)`, using `.returns<ProjectRow[]>()`). Header: "Proposals" + "New proposal" button. Renders `ProjectsTable`. Throws on DB error instead of silently returning an empty array.
+
+#### `src/app/(dashboard)/projects/new/ProjectForm.tsx`
+
+Client component. Fields: title (required, client-side guard), client_name, deadline (date), notes, rfp_text (10-row monospace textarea). `res.json()` typed as `{ data, error: { code, message } | null }` for strict-mode safety. On success: redirects to `/projects/[id]/sections` if rfp_text provided, else `/projects/[id]`. Cancel button → `/projects`.
+
+#### `src/app/(dashboard)/projects/new/page.tsx`
+
+Server wrapper. Auth guard only. Renders heading + `<ProjectForm />`.
+
+#### `src/app/(dashboard)/projects/[id]/page.tsx`
+
+Server component. Fetches project filtered by both `id` and `org_id` (defense-in-depth alongside RLS). Throws on non-404 DB errors. Shows: back-link, title, "Review sections" button → `/projects/[id]/sections`, "AI editor coming in Week 5" placeholder, section list with status dots (green=approved, blue=generated, gray=else).
+
+#### `src/app/(dashboard)/projects/[id]/sections/page.tsx`
+
+Server component. Fetches project (org-scoped) and sections ordered by position. Passes `initialSections` + `projectId` to `SectionList`.
+
+#### `src/app/(dashboard)/projects/[id]/sections/SectionList.tsx`
+
+Client component. Uses `@dnd-kit/sortable` with `PointerSensor` (activation distance 8px). Features:
+- Drag handle per row.
+- Click-to-rename with `<Input>` inline edit; Enter/blur commits, Escape cancels.
+- Delete button removes from local state.
+- "+ Add section manually" appends a new section with `crypto.randomUUID()` id.
+- "Confirm & start generating →" POSTs to `/api/projects/[id]/sections/bulk` then navigates to `/projects/[id]`. Disabled when list is empty or loading.
+
+#### `src/app/(dashboard)/error.tsx` *(new)*
+
+Client error boundary for the entire `(dashboard)` route segment. Catches thrown errors from server components (DB failures, etc.) and renders a user-friendly "Something went wrong" message with a "Try again" reset button.
+
+#### `src/components/ui/textarea.tsx` *(new)*
+
+shadcn/ui-style `<Textarea>` component. Added because it was missing from the initial scaffold.
+
+---
+
+### Modified Files
+
+#### `src/types/database.ts`
+
+- Added `rfp_raw_text: string | null` to `rfp_projects` Row, Insert, Update types.
+- Added `increment_proposals_if_under_limit` to the `Functions` block: `Args: { p_org_id: string; p_limit: number }`, `Returns: number`.
+
+---
+
+### Key Decisions & Notes
+
+| Decision | Reason |
+|---|---|
+| `atomicIncrementProposals` uses a Postgres RPC instead of read-then-write | Two concurrent `POST /api/projects` requests from the same org could both pass the read-side limit check and create one too many projects. The RPC uses `UPDATE ... WHERE proposals_used < p_limit RETURNING proposals_used`, which is atomic under Postgres MVCC. |
+| `detectSections()` wrapped in try/catch in POST `/api/projects` | An AI timeout or empty response should not roll back the project insert. The project is created; sections can be added manually. `atomicIncrementProposals` still fires so the limit slot is consumed. |
+| No `org_id` on `rfp_sections` | The schema enforces tenant isolation via `project_id → rfp_projects.org_id`. All section routes verify project ownership before touching sections. RLS mirrors this join. |
+| `SectionList` uses `crypto.randomUUID()` for new section IDs | `Date.now()` collides if two sections are added in the same millisecond. `crypto.randomUUID()` is available in all modern browsers and Node 18+. |
+| `PointerSensor` with `activationConstraint: { distance: 8 }` | Without an activation constraint, a tap on the drag handle fires a drag before click handlers on child buttons can run. The 8px distance threshold lets taps through cleanly. |
+| Server pages for `/projects/[id]` scope queries by `org_id` | Supabase RLS handles isolation at the DB level, but the application layer adds an `.eq("org_id", me.org_id)` guard for defense-in-depth. |
+
+---
+
+*Next: Week 5 — AI Editor module*
+
+---
+
 ## [Week 3 — Knowledge Base Module] 2026-05-01
 
 **Branch:** `feature/auth-and-org`
