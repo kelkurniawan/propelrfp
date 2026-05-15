@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   DndContext,
@@ -40,10 +40,6 @@ function SortableRow({
     useSortable({ id: section.id });
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(section.title);
-
-  useEffect(() => {
-    if (!editing) setDraft(section.title);
-  }, [section.title, editing]);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -91,7 +87,7 @@ function SortableRow({
       ) : (
         <button
           className="flex-1 text-left text-sm hover:underline"
-          onClick={() => setEditing(true)}
+          onClick={() => { setDraft(section.title); setEditing(true); }}
         >
           {section.title}
         </button>
