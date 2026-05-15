@@ -1,7 +1,6 @@
 import { redirect, notFound } from "next/navigation";
-import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
-import { Button } from "@/components/ui/button";
+import { EditorShell } from "./EditorShell";
 
 export default async function ProjectPage({
   params,
@@ -23,68 +22,29 @@ export default async function ProjectPage({
     .single();
   if (!me) redirect("/signup/org");
 
-  const { data: project, error } = await supabase
+  const { data: project, error: projectError } = await supabase
     .from("rfp_projects")
-    .select("id, title, status, rfp_sections(id, title, status, position)")
+    .select("id, title")
     .eq("id", id)
     .eq("org_id", me.org_id)
-    .order("position", { ascending: true, referencedTable: "rfp_sections" })
     .single();
 
-  if (error && error.code !== "PGRST116") throw error;
+  if (projectError && projectError.code !== "PGRST116") throw projectError;
   if (!project) notFound();
 
-  const sections = project.rfp_sections ?? [];
-  const approvedCount = sections.filter((s) => s.status === "approved").length;
+  const { data: sections, error: sectionsError } = await supabase
+    .from("rfp_sections")
+    .select("id, title, position, rfp_content, ai_draft, final_content, status, updated_at")
+    .eq("project_id", id)
+    .order("position", { ascending: true });
+
+  if (sectionsError) throw sectionsError;
 
   return (
-    <main className="mx-auto max-w-3xl p-6 md:p-10">
-      <div className="flex items-center justify-between">
-        <div>
-          <Link
-            href="/projects"
-            className="text-xs text-muted-foreground hover:underline"
-          >
-            ← Proposals
-          </Link>
-          <h1 className="mt-1 text-2xl font-semibold">{project.title}</h1>
-        </div>
-        <Link href={`/projects/${id}/sections`}>
-          <Button variant="outline" size="sm">
-            Review sections
-          </Button>
-        </Link>
-      </div>
-
-      <p className="mt-4 text-sm text-muted-foreground rounded-lg border border-dashed p-6 text-center">
-        AI editor coming in Week 5.
-        <br />
-        <span className="font-medium text-foreground">
-          {approvedCount}/{sections.length} sections approved.
-        </span>
-      </p>
-
-      {sections.length > 0 && (
-        <ul className="mt-6 divide-y rounded-lg border">
-          {sections.map((s) => (
-            <li key={s.id} className="flex items-center gap-3 px-4 py-3">
-              <span
-                className={`h-2 w-2 rounded-full shrink-0 ${
-                  s.status === "approved"
-                    ? "bg-green-500"
-                    : s.status === "generated"
-                    ? "bg-blue-400"
-                    : "bg-gray-300"
-                }`}
-              />
-              <span className="flex-1 text-sm">{s.title}</span>
-              <span className="text-xs text-muted-foreground capitalize">
-                {s.status}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </main>
+    <EditorShell
+      projectId={id}
+      projectTitle={project.title}
+      sections={sections ?? []}
+    />
   );
 }
