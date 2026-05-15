@@ -58,11 +58,15 @@ export const POST = withErrorHandling(async (req) => {
   }
 
   const serviceClient = await createServiceClient();
-  await serviceClient.from("subscriptions").insert({
+  const { error: subError } = await serviceClient.from("subscriptions").insert({
     org_id: org.id,
     plan: "free",
     status: "active",
   });
+  if (subError) {
+    console.error("[signup] subscription insert failed", subError);
+    return ApiErrors.InternalError();
+  }
 
   return ok({ orgId: org.id });
 });
