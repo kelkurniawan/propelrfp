@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { ok, fail, withErrorHandling } from "@/lib/api";
-import { requireRole } from "@/lib/auth/requireRole";
+import { requireRole, ApiError } from "@/lib/auth/requireRole";
 import { inviteCreateSchema } from "@/lib/schemas/org";
 import { sendInvite } from "@/lib/email/sendInvite";
+import { PLAN_LIMITS } from "@/types";
+import type { Plan } from "@/types";
 
 function cryptoRandomToken() {
   const bytes = new Uint8Array(24);
@@ -12,6 +14,28 @@ function cryptoRandomToken() {
 
 export const POST = withErrorHandling(async (req) => {
   const { userId, orgId, supabase } = await requireRole(["owner", "admin"]);
+
+  // Member quota check
+  const [{ data: sub }, { count: memberCount }] = await Promise.all([
+    supabase.from("subscriptions").select("plan").eq("org_id", orgId).single(),
+    supabase.from("users").select("id", { count: "exact", head: true }).eq("org_id", orgId),
+  ]);
+  const planName = (sub?.plan ?? "free") as Plan;
+  const memberLimit = PLAN_LIMITS[planName].users;
+  if (isFinite(memberLimit) && (memberCount ?? 0) >= memberLimit) {
+    throw new ApiError(
+      "QUOTA_EXCEEDED",
+      `Team member limit reached (${memberCount ?? 0}/${memberLimit}). Upgrade to add more members.`,
+      402,
+      {
+        limit_type: "members",
+        current: memberCount ?? 0,
+        limit: memberLimit,
+        plan: planName,
+      }
+    );
+  }
+
   const body = inviteCreateSchema.parse(await req.json());
 
   const { data: existingUser } = await supabase

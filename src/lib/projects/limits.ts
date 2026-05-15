@@ -18,13 +18,19 @@ export async function assertProposalLimit(
   }
 
   const limit =
-    PLAN_LIMITS[sub.plan as keyof typeof PLAN_LIMITS]?.proposals ?? 10;
+    PLAN_LIMITS[sub.plan as keyof typeof PLAN_LIMITS]?.proposals ?? 3;
 
-  if (sub.proposals_used >= limit) {
+  if (isFinite(limit) && sub.proposals_used >= limit) {
     throw new ApiError(
-      "limit_reached",
-      `Proposal limit reached. Used ${sub.proposals_used} of ${limit} this cycle. Upgrade to create more proposals.`,
-      429
+      "QUOTA_EXCEEDED",
+      `Proposal limit reached (${sub.proposals_used}/${limit}). Upgrade to create more proposals.`,
+      402,
+      {
+        limit_type: "proposals",
+        current: sub.proposals_used,
+        limit,
+        plan: sub.plan,
+      }
     );
   }
 
@@ -36,9 +42,12 @@ export async function atomicIncrementProposals(
   orgId: string,
   limit: number
 ): Promise<void> {
+  // Postgres INT max — used when plan has unlimited proposals so the RPC doesn't error
+  const safeLimit = isFinite(limit) ? limit : 2147483647;
+
   const { data: newCount, error } = await supabase.rpc(
     "increment_proposals_if_under_limit",
-    { p_org_id: orgId, p_limit: limit }
+    { p_org_id: orgId, p_limit: safeLimit }
   );
 
   if (error) {
@@ -47,9 +56,10 @@ export async function atomicIncrementProposals(
 
   if (newCount === -1) {
     throw new ApiError(
-      "limit_reached",
+      "QUOTA_EXCEEDED",
       "Proposal limit reached. Upgrade to create more proposals.",
-      429
+      402,
+      { limit_type: "proposals" }
     );
   }
 }
