@@ -40,7 +40,12 @@ export function TiptapEditor({ content, editable, onChange }: Props) {
     },
   });
 
-  if (!editor) return null;
+  if (!editor) return (
+    <div className="flex flex-col flex-1 border rounded-md overflow-hidden bg-background">
+      <div className="border-b bg-muted/50 px-2 py-1 h-8 shrink-0" />
+      <div className="flex-1 min-h-[200px]" />
+    </div>
+  );
 
   const groups: ToolbarButton[][] = [
     [

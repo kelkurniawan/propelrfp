@@ -41,6 +41,7 @@ export function ProjectsTable({
 
   async function handleStatusChange(projectId: string, newStatus: ProjectStatus) {
     const prev = projects.find((p) => p.id === projectId)?.status;
+    if (!prev) return;
     setProjects((ps) =>
       ps.map((p) => (p.id === projectId ? { ...p, status: newStatus } : p))
     );

@@ -141,7 +141,7 @@ export function SectionPanel({
           ) : (
             <TiptapEditor
               content={section.final_content ?? section.ai_draft ?? ""}
-              editable={true}
+              editable={section.status !== "approved"}
               onChange={onDraftChange}
             />
           )}

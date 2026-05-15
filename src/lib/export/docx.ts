@@ -1,5 +1,4 @@
-import { Document, Packer, Paragraph, TextRun, HeadingLevel } from "docx";
-import type { UnderlineType } from "docx";
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, UnderlineType } from "docx";
 
 export interface ExportSection {
   title: string;
@@ -130,7 +129,7 @@ function inlineRuns(el: Element | Node, inherited: RunStyle = {}): TextRun[] {
     switch (c.tagName?.toUpperCase()) {
       case "STRONG": case "B": style.bold = true; break;
       case "EM": case "I": style.italics = true; break;
-      case "U": style.underline = { type: "single" }; break;
+      case "U": style.underline = { type: UnderlineType.SINGLE }; break;
       case "S": case "DEL": style.strike = true; break;
       case "CODE": style.font = { name: "Courier New" }; break;
     }
