@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import type { SectionDraft } from "./types";
+import { TiptapEditor } from "./TiptapEditor";
 
 interface Props {
   section: SectionDraft;
@@ -133,12 +134,15 @@ export function SectionPanel({
             <div className="flex-1 border rounded-md flex items-center justify-center text-sm text-muted-foreground">
               Click Generate to create a draft
             </div>
+          ) : isStreaming ? (
+            <div className="flex-1 resize-none border rounded-md p-3 text-sm leading-relaxed overflow-y-auto bg-background">
+              {displayText}
+            </div>
           ) : (
-            <textarea
-              className="flex-1 resize-none border rounded-md p-3 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-ring bg-background"
-              value={displayText}
-              readOnly={isStreaming}
-              onChange={(e) => onDraftChange(e.target.value)}
+            <TiptapEditor
+              content={section.final_content ?? section.ai_draft ?? ""}
+              editable={true}
+              onChange={onDraftChange}
             />
           )}
         </div>
