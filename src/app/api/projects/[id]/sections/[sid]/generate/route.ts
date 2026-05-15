@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { z, ZodError } from "zod";
 import { requireRole, ApiError } from "@/lib/auth/requireRole";
 import { embedText } from "@/lib/ai/embeddings";
-import { generateSectionStream } from "@/lib/ai/generate";
+import { generateSectionStream, MODEL } from "@/lib/ai/generate";
 
 const bodySchema = z.object({
   custom_instruction: z.string().max(1000).nullish(),
@@ -91,7 +91,10 @@ export async function POST(
     }
 
     return new Response(stream, {
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      headers: {
+        "Content-Type": "text/plain; charset=utf-8",
+        "X-Model": MODEL,
+      },
     });
   } catch (err) {
     if (err instanceof ZodError) {
@@ -106,7 +109,6 @@ export async function POST(
         { status: err.status }
       );
     }
-    console.error("[generate] unhandled error", err);
     return NextResponse.json(
       { data: null, error: { code: "internal_error", message: "Something went wrong" } },
       { status: 500 }

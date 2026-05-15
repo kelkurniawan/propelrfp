@@ -7,7 +7,7 @@ import { SectionPanel } from "./SectionPanel";
 import type { SectionDraft } from "./types";
 
 const TWO_MINUTES_MS = 2 * 60 * 1000;
-const GEN_MODEL = "claude-sonnet-4-5";
+const FALLBACK_MODEL = "claude-sonnet-4-5";
 
 type InitialSection = Pick<
   RfpSection,
@@ -92,6 +92,7 @@ export function EditorShell({ projectId, projectTitle, sections: initialSections
         throw new Error("Generation request failed");
       }
 
+      const usedModel = res.headers.get("x-model") ?? FALLBACK_MODEL;
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let fullText = "";
@@ -128,7 +129,7 @@ export function EditorShell({ projectId, projectTitle, sections: initialSections
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           section_id: sectionId,
-          model: GEN_MODEL,
+          model: usedModel,
           tokens_input: tokensInput,
           tokens_output: tokensOutput,
           custom_instruction: customInstruction ?? null,

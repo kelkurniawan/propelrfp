@@ -9,7 +9,7 @@ function getClient(): Anthropic {
   return cachedClient;
 }
 
-const MODEL = "claude-sonnet-4-5";
+export const MODEL = "claude-sonnet-4-5";
 const MAX_TOKENS = 2000;
 const MAX_RETRIES = 3;
 
