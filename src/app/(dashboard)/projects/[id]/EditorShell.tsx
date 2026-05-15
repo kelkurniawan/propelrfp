@@ -1,8 +1,7 @@
 "use client";
 
 import { useState, useRef } from "react";
-import type { RfpSection } from "@/types";
-import type { SectionStatus } from "@/types";
+import type { RfpSection, SectionStatus } from "@/types";
 import { SectionSidebar } from "./SectionSidebar";
 import { SectionPanel } from "./SectionPanel";
 import type { SectionDraft } from "./types";
@@ -49,7 +48,7 @@ export function EditorShell({ projectId, projectTitle, sections: initialSections
   const [streamError, setStreamError] = useState<string | null>(null);
 
   const stopRequestedRef = useRef(false);
-  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   function putSection(sectionId: string, body: Record<string, unknown>) {
     return fetch(`/api/projects/${projectId}/sections/${sectionId}`, {
@@ -71,6 +70,11 @@ export function EditorShell({ projectId, projectTitle, sections: initialSections
     setGeneratingId(sectionId);
     setStreamingText("");
     setStreamError(null);
+    setSections((prev) =>
+      prev.map((s) =>
+        s.id === sectionId ? { ...s, status: "generating" as SectionStatus } : s
+      )
+    );
 
     try {
       const res = await fetch(
@@ -92,12 +96,16 @@ export function EditorShell({ projectId, projectTitle, sections: initialSections
       const decoder = new TextDecoder();
       let fullText = "";
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        fullText += chunk;
-        setStreamingText(fullText);
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value, { stream: true });
+          fullText += chunk;
+          setStreamingText(fullText);
+        }
+      } finally {
+        reader.releaseLock();
       }
 
       // Persist ai_draft on stream close
@@ -162,14 +170,17 @@ export function EditorShell({ projectId, projectTitle, sections: initialSections
       prev.map((s) => (s.id === sectionId ? { ...s, final_content: text } : s))
     );
 
-    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    const existing = saveTimersRef.current.get(sectionId);
+    if (existing) clearTimeout(existing);
     if (isStreaming) return;
 
-    saveTimerRef.current = setTimeout(async () => {
+    const timer = setTimeout(async () => {
+      saveTimersRef.current.delete(sectionId);
       setSavedState("saving");
       const res = await putSection(sectionId, { final_content: text });
       setSavedState(res.ok ? "saved" : "error");
     }, 1500);
+    saveTimersRef.current.set(sectionId, timer);
   }
 
   async function handleApprove(sectionId: string) {
