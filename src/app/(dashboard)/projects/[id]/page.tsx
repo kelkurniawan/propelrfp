@@ -16,13 +16,14 @@ export default async function ProjectPage({
   } = await supabase.auth.getUser();
   if (!user) redirect("/login");
 
-  const { data: project } = await supabase
+  const { data: project, error } = await supabase
     .from("rfp_projects")
     .select("id, title, status, rfp_sections(id, title, status, position)")
     .eq("id", id)
     .order("position", { ascending: true, referencedTable: "rfp_sections" })
     .single();
 
+  if (error && error.code !== "PGRST116") throw error;
   if (!project) notFound();
 
   const sections = project.rfp_sections ?? [];
