@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { withErrorHandling, ok, fail } from "@/lib/api";
 import { requireRole } from "@/lib/auth/requireRole";
-import { stripe } from "@/lib/stripe/client";
+import { getStripe } from "@/lib/stripe/client";
 import { createServiceClient } from "@/lib/supabase/server";
 
 const bodySchema = z.object({ price_id: z.string().min(1) });
@@ -19,7 +19,7 @@ export const POST = withErrorHandling(async (req) => {
 
   let customerId = sub?.stripe_customer_id ?? null;
   if (!customerId) {
-    const customer = await stripe.customers.create({ metadata: { org_id: orgId } });
+    const customer = await getStripe().customers.create({ metadata: { org_id: orgId } });
     customerId = customer.id;
     await serviceClient
       .from("subscriptions")
@@ -27,7 +27,7 @@ export const POST = withErrorHandling(async (req) => {
       .eq("org_id", orgId);
   }
 
-  const session = await stripe.checkout.sessions.create({
+  const session = await getStripe().checkout.sessions.create({
     customer: customerId,
     mode: "subscription",
     line_items: [{ price: price_id, quantity: 1 }],

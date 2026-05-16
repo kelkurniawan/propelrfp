@@ -1,5 +1,5 @@
 import type Stripe from "stripe";
-import { stripe } from "./client";
+import { getStripe } from "./client";
 import { createClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
 
@@ -20,7 +20,7 @@ export async function verifyWebhookSignature(
   body: string,
   signature: string
 ): Promise<Stripe.Event> {
-  return stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET!);
+  return getStripe().webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET!);
 }
 
 export async function handleSubscriptionUpsert(subscription: Stripe.Subscription) {
