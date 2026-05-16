@@ -5,6 +5,318 @@ Format: `[Week N — Phase] Date` → grouped by file, with what changed and why
 
 ---
 
+## [Week 7 — Billing & Limits] 2026-05-16
+
+**Branch:** `feature/week7-billing-limits`
+**Build status:** `pnpm tsc --noEmit` clean. Merged to `develop`.
+
+**Commits (oldest → newest):**
+
+| SHA       | Message |
+| --------- | ------- |
+| `7b0d21f` | `feat: add 'free' plan to subscriptions constraint` |
+| `ebae7ad` | `fix: add IF EXISTS to DROP CONSTRAINT for defensive migration` |
+| `ff5a31b` | `feat: add free plan to Plan type and PLAN_LIMITS` |
+| `c8cbbd9` | `feat: extend ApiError with optional extra fields for quota responses` |
+| `ca01e64` | `fix: widen ApiResponse error type to allow extra quota fields` |
+| `35e522d` | `feat: update quota checks to 402/QUOTA_EXCEEDED; add member limit; fix Infinity→int overflow` |
+| `30eec0a` | `feat: auto-provision free subscription on org creation` |
+| `25780db` | `fix: handle subscription insert failure in org creation` |
+| `6a30284` | `feat: detect plan from Stripe price_id in webhook handler` |
+| `fc5d4d1` | `feat: add billing API routes (subscription, checkout, portal, webhook)` |
+| `8c23d97` | `feat: add upgrade modal context and handleApiError utility` |
+| `cf011f7` | `feat: add UpgradeModal and mount in dashboard layout` |
+| `458f642` | `feat: billing settings page (usage cards, plan tiles, checkout feedback)` |
+
+---
+
+### Overview
+
+Week 7 implements Module 6 (Billing & Limits): Stripe-backed subscription management, per-plan quota enforcement, and the `/settings/billing` page. New orgs start on a permanent free plan (auto-provisioned at signup). Paid plans are gated via Stripe Checkout. Quota limits block at the API layer with `402 QUOTA_EXCEEDED` responses and surface an upgrade modal to the user. The design spec lives at `docs/superpowers/specs/2026-05-16-week7-billing-limits-design.md` and the implementation plan at `docs/superpowers/plans/2026-05-16-week7-billing-limits.md`.
+
+---
+
+### Plans & Limits
+
+| Plan | Price | Proposals | Storage | Members |
+|------|-------|-----------|---------|---------|
+| Free | $0 | 3 | 250 MB | 1 |
+| Starter | $299/mo | 10 | 500 MB | 1 |
+| Growth | $599/mo | ∞ | 5 GB | 5 |
+| Enterprise | custom | ∞ | custom | custom |
+
+- Free plan is permanent — no trial expiry.
+- Enterprise is sales-led; `plan = "enterprise"` set manually in DB, no Stripe involvement.
+
+---
+
+### New Environment Variables
+
+```
+STRIPE_GROWTH_PRICE_ID=price_...   # Growth plan price ID from Stripe dashboard
+```
+
+Existing required: `STRIPE_SECRET_KEY`, `NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_STARTER_PRICE_ID`.
+
+---
+
+### New Files
+
+#### `supabase/migrations/006_free_plan.sql`
+
+Widens the `subscriptions.plan` check constraint to include `'free'` and changes the column default from `'starter'` to `'free'`.
+
+```sql
+ALTER TABLE subscriptions DROP CONSTRAINT IF EXISTS subscriptions_plan_check;
+ALTER TABLE subscriptions
+  ADD CONSTRAINT subscriptions_plan_check
+  CHECK (plan IN ('free', 'starter', 'growth', 'enterprise'));
+ALTER TABLE subscriptions ALTER COLUMN plan SET DEFAULT 'free';
+```
+
+Run `supabase db push` to apply.
+
+---
+
+#### `src/lib/billing/upgrade-modal-context.tsx`
+
+`"use client"` — React Context for global upgrade modal state. No new package dependency (replaces the Zustand store originally specced).
+
+```ts
+export type QuotaType = "proposals" | "storage" | "members";
+
+export interface QuotaExceededInfo {
+  limitType: QuotaType;
+  current: number;
+  limit: number;
+  plan: string;
+}
+
+export function UpgradeModalProvider({ children }: { children: React.ReactNode })
+export function useUpgradeModal(): { open, info, openModal, closeModal }
+```
+
+`openModal` and `closeModal` are memoised with `useCallback`. `UpgradeModalProvider` is mounted once in the dashboard layout so any child page can call `useUpgradeModal()`.
+
+---
+
+#### `src/lib/billing/handle-error.ts`
+
+Client-side utility called after any `fetch` when `!res.ok`. On `402 + QUOTA_EXCEEDED` it calls `openModal` with the structured quota info from the response body. Otherwise throws the error message as a plain `Error`.
+
+```ts
+export async function handleApiError(
+  res: Response,
+  openModal: (info: QuotaExceededInfo) => void
+): Promise<never>
+```
+
+---
+
+#### `src/components/UpgradeModal.tsx`
+
+`"use client"` — shadcn `<Dialog>` driven by `useUpgradeModal()`.
+
+- Heading: "You've reached your [proposal / storage / team member] limit"
+- Body: states the plan name, limit, and current usage
+- "Upgrade plan" → navigates to `/settings/billing`
+- "Dismiss" → closes modal
+
+`formatValue` renders storage as MB, other types as plain numbers, `Infinity` as "unlimited".
+
+---
+
+#### `src/app/api/billing/subscription/route.ts`
+
+`GET` — returns current plan, status, period end, and computed usage for all three quota types. Accessible to any authenticated org member.
+
+```ts
+// Response shape
+{
+  data: {
+    plan: string;
+    status: string;
+    current_period_end: string | null;
+    usage: {
+      proposals: { current: number; limit: number };
+      storage_bytes: { current: number; limit: number };
+      members: { current: number; limit: number };
+    };
+  };
+  error: null;
+}
+```
+
+---
+
+#### `src/app/api/billing/checkout/route.ts`
+
+`POST { price_id: string }` — requires `owner` or `admin`. Creates or reuses a Stripe Customer, then creates a Checkout Session (`mode: "subscription"`). Returns `{ data: { url: string } }`. Client redirects to the URL.
+
+- `success_url`: `/settings/billing?session_id={CHECKOUT_SESSION_ID}`
+- `cancel_url`: `/settings/billing?canceled=1`
+- `subscription_data.metadata.org_id` set so the webhook can resolve the org.
+
+---
+
+#### `src/app/api/billing/portal/route.ts`
+
+`POST` — requires `owner` or `admin`. Creates a Stripe Customer Portal Session using the org's `stripe_customer_id`. Returns `{ data: { url: string } }`. Returns `404` if no Stripe customer exists (org is on free plan and has never checked out).
+
+---
+
+#### `src/app/api/billing/webhook/route.ts`
+
+`POST` — raw body route (`req.text()`). No `requireRole` — validates Stripe signature via `verifyWebhookSignature`. Handles:
+
+- `customer.subscription.created` → `handleSubscriptionUpsert`
+- `customer.subscription.updated` → `handleSubscriptionUpsert`
+- `customer.subscription.deleted` → `handleSubscriptionDeleted`
+
+Returns `200 { received: true }` on success. App Router does not auto-parse the body so `req.text()` works without config.
+
+---
+
+#### `src/app/(dashboard)/settings/billing/page.tsx`
+
+Server component. Fetches subscription + usage on the server (3 parallel Supabase queries), passes data as props to sub-components. Reads `STRIPE_STARTER_PRICE_ID` and `STRIPE_GROWTH_PRICE_ID` server-side and passes as string props to `PlanTiles`.
+
+---
+
+#### `src/app/(dashboard)/settings/billing/UsageCards.tsx`
+
+Server component. Renders three metric cards (Proposals, Storage, Team members) in a responsive 3-column grid.
+
+- Card turns amber (`border-amber-400 bg-amber-50`) when `current >= limit`
+- Progress bar turns amber when at limit; hidden entirely for unlimited plans (`Infinity`)
+- Storage displayed in MB via `formatStorage`
+
+---
+
+#### `src/app/(dashboard)/settings/billing/PlanTiles.tsx`
+
+`"use client"`. Renders plan-conditional UI:
+
+| Current plan | Renders |
+|---|---|
+| `free` | Starter tile (highlighted border) + Growth tile, both with Subscribe buttons |
+| `starter` | "Manage subscription →" link + Growth tile with Upgrade button (highlighted border) |
+| `growth` | "Manage subscription →" link + Enterprise contact link |
+| `enterprise` | "Contact your account manager" note only |
+
+`SubscribeButton` calls `POST /api/billing/checkout` and redirects to the Stripe Checkout URL. `ManageButton` calls `POST /api/billing/portal` and redirects to the Stripe Customer Portal.
+
+---
+
+#### `src/app/(dashboard)/settings/billing/CheckoutFeedback.tsx`
+
+`"use client"`. Reads `?session_id` and `?canceled` search params via `useSearchParams` (wrapped in `<Suspense>` by the page). On mount:
+
+- `session_id` present → `toast.success("Subscription activated!")` → `router.replace(pathname)` to clear params
+- `canceled` present → neutral toast → `router.replace(pathname)`
+
+---
+
+### Modified Files
+
+#### `src/types/database.ts`
+
+Added `"free"` to the `plan` union in `subscriptions` Row, Insert, and Update types (three locations, previously `"starter" | "growth" | "enterprise"`).
+
+---
+
+#### `src/types/index.ts`
+
+- `Plan` type: added `"free"` → `"free" | "starter" | "growth" | "enterprise"`
+- `PLAN_LIMITS` const: added `free` entry (`proposals: 3, storageMb: 250, users: 1`)
+- `ApiResponse.error`: widened from `{ code: string; message: string }` to `{ code: string; message: string; [key: string]: unknown }` to accommodate extra quota fields spread into error responses
+
+---
+
+#### `src/lib/auth/requireRole.ts`
+
+`ApiError` extended with optional `extra?: Record<string, unknown>` as a 4th constructor parameter. Used by quota enforcement to attach `{ limit_type, current, limit, plan }` to 402 responses.
+
+---
+
+#### `src/lib/api.ts`
+
+`withErrorHandling` catch block: `ApiError` branch now spreads `err.extra` into the error JSON instead of calling `fail()`. This allows quota metadata to pass through to the client without a separate response path.
+
+```ts
+if (err instanceof ApiError) {
+  return NextResponse.json(
+    { data: null, error: { code: err.code, message: err.message, ...err.extra } },
+    { status: err.status }
+  );
+}
+```
+
+---
+
+#### `src/lib/projects/limits.ts`
+
+- `assertProposalLimit`: default fallback changed from `?? 10` to `?? 3`; added `isFinite(limit) &&` guard so unlimited plans (Growth/Enterprise) skip the check; error changed from `"limit_reached"` / 429 to `"QUOTA_EXCEEDED"` / 402 with `{ limit_type, current, limit, plan }` extra
+- `atomicIncrementProposals`: **bug fix** — clamps `Infinity` to `2147483647` (Postgres `INT` max) before passing to the RPC (`p_limit` is typed as `int` in the DB function; passing `Infinity` caused a crash); error changed to `"QUOTA_EXCEEDED"` / 402
+
+---
+
+#### `src/lib/kb/limits.ts`
+
+- Default plan fallback changed from `"starter"` to `"free"`
+- `isFinite(limitMb)` replaces `limitMb === Infinity` for robustness
+- Added `isFinite(limitBytes) &&` guard so unlimited plans skip the check
+- Error changed from `"limit_reached"` / 429 to `"QUOTA_EXCEEDED"` / 402 with `{ limit_type, current, limit, plan }` extra
+
+---
+
+#### `src/app/api/org/invitations/route.ts`
+
+Added member quota check at the top of the `POST` handler (before body parsing). Parallel-fetches the org's subscription plan and current member count, then throws `ApiError("QUOTA_EXCEEDED", ..., 402, { limit_type: "members", ... })` if `isFinite(memberLimit) && memberCount >= memberLimit`.
+
+---
+
+#### `src/app/api/auth/signup/route.ts`
+
+In the `"create-org"` branch, after the user row is inserted, a free subscription record is inserted using the service role client:
+
+```ts
+const serviceClient = await createServiceClient();
+const { error: subError } = await serviceClient.from("subscriptions").insert({
+  org_id: org.id,
+  plan: "free",
+  status: "active",
+});
+if (subError) {
+  console.error("[signup] subscription insert failed", subError);
+  return ApiErrors.InternalError();
+}
+```
+
+Service role is required because `subscriptions` RLS blocks inserts from non-service roles.
+
+---
+
+#### `src/lib/stripe/webhooks.ts`
+
+- Added `planFromSubscription(subscription)` helper: reads `subscription.items.data[0].price.id` and returns `"growth"` if it matches `STRIPE_GROWTH_PRICE_ID`, otherwise `"starter"`
+- `handleSubscriptionUpsert`: replaced hardcoded `plan: "starter"` with `plan: planFromSubscription(subscription)`
+- `handleSubscriptionDeleted`: now also sets `plan: "free"` alongside `status: "canceled"`, so canceled orgs fall back to free-plan limits
+
+---
+
+#### `src/app/(dashboard)/layout.tsx`
+
+Wrapped children in `<UpgradeModalProvider>` and mounted `<UpgradeModal />` once at the dashboard root so every child page can trigger quota exceeded dialogs via `useUpgradeModal()`.
+
+---
+
+#### `src/app/(dashboard)/settings/layout.tsx`
+
+Enabled the Billing tab: removed the disabled `<span>` branch, replaced with a uniform `<Link>` for all three tabs, and updated `TABS` array (`href: "#"` / `disabled: true` → `href: "/settings/billing"`).
+
+---
+
 ## [Week 6 — Review & Editor Completion] 2026-05-16
 
 **Branch:** `feature/rfp-projects`
