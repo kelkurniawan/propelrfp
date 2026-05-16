@@ -4,10 +4,17 @@ import type { UserRole } from "@/types";
 export class ApiError extends Error {
   code: string;
   status: number;
-  constructor(code: string, message: string, status: number) {
+  extra?: Record<string, unknown>;
+  constructor(
+    code: string,
+    message: string,
+    status: number,
+    extra?: Record<string, unknown>
+  ) {
     super(message);
     this.code = code;
     this.status = status;
+    this.extra = extra;
   }
 }
 

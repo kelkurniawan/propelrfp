@@ -3,7 +3,7 @@ import Link from "next/link";
 const TABS = [
   { href: "/settings/org", label: "Organization" },
   { href: "/settings/members", label: "Members" },
-  { href: "#", label: "Billing", disabled: true },
+  { href: "/settings/billing", label: "Billing" },
 ];
 
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
@@ -13,25 +13,15 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
         Settings
       </h1>
       <nav className="mt-4 flex gap-1 border-b border-border">
-        {TABS.map((t) =>
-          t.disabled ? (
-            <span
-              key={t.label}
-              className="cursor-not-allowed border-b-2 border-transparent px-4 py-2 text-sm text-muted-foreground"
-              title="Coming soon"
-            >
-              {t.label}
-            </span>
-          ) : (
-            <Link
-              key={t.href}
-              href={t.href}
-              className="border-b-2 border-transparent px-4 py-2 text-sm font-medium text-foreground hover:border-primary"
-            >
-              {t.label}
-            </Link>
-          )
-        )}
+        {TABS.map((t) => (
+          <Link
+            key={t.href}
+            href={t.href}
+            className="border-b-2 border-transparent px-4 py-2 text-sm font-medium text-foreground hover:border-primary"
+          >
+            {t.label}
+          </Link>
+        ))}
       </nav>
       <div className="mt-8">{children}</div>
     </div>

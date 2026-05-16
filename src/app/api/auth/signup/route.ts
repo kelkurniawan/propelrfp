@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createServiceClient } from "@/lib/supabase/server";
 import { ApiErrors, ok, withErrorHandling } from "@/lib/api";
 import { signupBodySchema } from "@/lib/schemas/auth";
 
@@ -54,6 +54,17 @@ export const POST = withErrorHandling(async (req) => {
   });
   if (userError) {
     console.error("[signup] users insert failed", userError);
+    return ApiErrors.InternalError();
+  }
+
+  const serviceClient = await createServiceClient();
+  const { error: subError } = await serviceClient.from("subscriptions").insert({
+    org_id: org.id,
+    plan: "free",
+    status: "active",
+  });
+  if (subError) {
+    console.error("[signup] subscription insert failed", subError);
     return ApiErrors.InternalError();
   }
 

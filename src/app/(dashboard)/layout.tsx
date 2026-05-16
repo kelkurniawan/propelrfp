@@ -1,5 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { UpgradeModalProvider } from "@/lib/billing/upgrade-modal-context";
+import { UpgradeModal } from "@/components/UpgradeModal";
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
   const supabase = await createClient();
@@ -9,5 +11,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   if (!user) redirect("/login");
 
-  return <>{children}</>;
+  return (
+    <UpgradeModalProvider>
+      {children}
+      <UpgradeModal />
+    </UpgradeModalProvider>
+  );
 }
