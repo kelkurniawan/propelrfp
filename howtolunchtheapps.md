@@ -324,3 +324,129 @@ git push origin v1.0.0
 ```
 
 Then verify the production Vercel deploy completes and repeat a quick smoke test (steps 1.1, 3.2–3.3, 5.2, 6.4, 8.3) against the production URL with real email and Stripe live mode.
+
+---
+
+## Part 4 — Playwright Automated UI Tests
+
+Playwright runs the same UAT checklist automatically — headless against local dev or any remote URL.
+
+### Test Structure
+
+```
+tests/
+  e2e/
+    smoke.spec.ts       — fast 8-step happy-path, run before every deploy
+    auth.spec.ts        — sign out, protected route redirect
+    dashboard.spec.ts   — page title, heading, empty/populated state
+    kb.spec.ts          — page title, usage meter, file input
+    projects.spec.ts    — create project, detect sections
+    generation.spec.ts  — generate AI draft, editor non-empty
+    billing.spec.ts     — page title, plan tiles, upgrade button
+  pages/
+    DashboardPage.ts    — page object
+    KbPage.ts           — page object
+    ProjectPage.ts      — page object (includes SAMPLE_RFP text)
+    BillingPage.ts      — page object
+  global-setup.ts       — logs in, saves auth cookies to tests/.auth/user.json
+playwright.config.ts    — config: baseURL, webServer, projects, storageState
+```
+
+---
+
+### One-Time Setup
+
+**1. Install browsers** (run once after cloning):
+
+```bash
+pnpm exec playwright install chromium
+```
+
+**2. Create a test account** in the app (sign up manually with a dedicated test email — do not reuse your personal account). The test account must have an org already created.
+
+**3. Create `.env.test`** in the `propelrfp/` directory:
+
+```env
+TEST_USER_EMAIL=testuser@yourdomain.com
+TEST_USER_PASSWORD=your-test-password
+```
+
+This file is gitignored (matches `.env*`). Never commit real credentials.
+
+---
+
+### Running Tests
+
+#### Against local dev server
+
+The dev server starts automatically before tests run if it isn't already running.
+
+```bash
+# Load test credentials
+$env:TEST_USER_EMAIL="testuser@yourdomain.com"
+$env:TEST_USER_PASSWORD="your-test-password"
+
+# Run full suite
+pnpm test:e2e
+
+# Run only the smoke test (fastest — 8 checks)
+pnpm test:e2e:smoke
+
+# Open Playwright UI (interactive, great for debugging)
+pnpm test:e2e:ui
+```
+
+#### Against staging URL
+
+Set `BASE_URL` to skip the local dev server and point at staging:
+
+```bash
+$env:BASE_URL="https://propelrfp-git-develop-kelkurniawan.vercel.app"
+$env:TEST_USER_EMAIL="testuser@yourdomain.com"
+$env:TEST_USER_PASSWORD="your-test-password"
+
+pnpm test:e2e:smoke
+```
+
+#### Against production
+
+```bash
+$env:BASE_URL="https://your-production-domain.com"
+$env:TEST_USER_EMAIL="testuser@yourdomain.com"
+$env:TEST_USER_PASSWORD="your-test-password"
+
+pnpm test:e2e:smoke
+```
+
+---
+
+### How Auth Works
+
+`global-setup.ts` runs before any test. It logs in with `TEST_USER_EMAIL` / `TEST_USER_PASSWORD` and saves the Supabase session cookies to `tests/.auth/user.json`. All other tests load this file via `storageState` so they start already logged in — no login steps repeated in every test.
+
+`tests/.auth/user.json` is gitignored. It's regenerated on every `pnpm test:e2e` run.
+
+---
+
+### View Results
+
+```bash
+# Open the HTML report after a run
+pnpm test:e2e:report
+```
+
+Screenshots and videos are saved to `test-results/` on failure. Both directories are gitignored.
+
+---
+
+### Test Commands Reference
+
+| Command | What it does |
+|---------|-------------|
+| `pnpm test:e2e` | Full suite (all specs, Chromium) |
+| `pnpm test:e2e:smoke` | Smoke only — 8 checks, ~3 min |
+| `pnpm test:e2e:ui` | Open interactive Playwright UI |
+| `pnpm test:e2e:report` | Open last HTML report |
+| `pnpm exec playwright test --headed` | Run with visible browser window |
+| `pnpm exec playwright test --debug` | Step-through debugger |
+| `pnpm exec playwright codegen http://localhost:3000` | Record new tests by clicking |
