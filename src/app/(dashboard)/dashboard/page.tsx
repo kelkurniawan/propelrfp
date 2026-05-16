@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import type { Metadata } from "next";
 import { createClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
 import { StatsCards } from "./StatsCards";
@@ -9,6 +10,8 @@ import type { RfpProject } from "@/types";
 interface ProjectRow extends RfpProject {
   rfp_sections: { status: string }[];
 }
+
+export const metadata: Metadata = { title: "Dashboard" };
 
 export default async function DashboardPage() {
   const supabase = await createClient();

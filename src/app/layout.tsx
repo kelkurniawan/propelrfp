@@ -14,7 +14,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PropelRFP — Win more contracts, faster.",
+  title: {
+    default: "PropelRFP — Win more contracts, faster.",
+    template: "%s | PropelRFP",
+  },
   description: "AI-powered RFP proposal automation grounded in your company's own winning history.",
 };
 

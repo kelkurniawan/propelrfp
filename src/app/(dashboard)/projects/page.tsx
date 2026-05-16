@@ -1,11 +1,14 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import type { Metadata } from "next";
 import { createClient } from "@/lib/supabase/server";
 import { Button } from "@/components/ui/button";
 import { ProjectsTable } from "@/app/(dashboard)/dashboard/ProjectsTable";
 import type { RfpProject } from "@/types";
 
 type ProjectRow = RfpProject & { rfp_sections: { status: string }[] };
+
+export const metadata: Metadata = { title: "Proposals" };
 
 export default async function ProjectsPage() {
   const supabase = await createClient();
