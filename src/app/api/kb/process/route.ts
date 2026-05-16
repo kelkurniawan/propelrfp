@@ -36,6 +36,7 @@ export async function POST(req: Request) {
       .from("knowledge_docs")
       .update({ status: "failed", error_message: message })
       .eq("id", doc.id);
+    return ok({ processed: null });
   }
 
   return ok({ processed: doc.id });
