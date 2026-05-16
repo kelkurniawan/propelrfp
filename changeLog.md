@@ -5,6 +5,110 @@ Format: `[Week N — Phase] Date` → grouped by file, with what changed and why
 
 ---
 
+## [Week 8 — UAT & Launch] 2026-05-16
+
+**Branch:** `feature/week8-launch`
+**Build status:** `pnpm build` clean. Merged to `develop`.
+
+**Commits (oldest → newest):**
+
+| SHA       | Message |
+| --------- | ------- |
+| `d0ecf09` | `fix: remove console.error calls from error boundary and cron routes` |
+| `d8d44ba` | `fix: return processed:null on doc processing failure to prevent cron false positive` |
+| `672ea12` | `feat: add loading skeletons for all dashboard routes` |
+| `5131d68` | `feat: add page-level metadata with title template` |
+| `d493597` | `feat: add Vercel Analytics` |
+| `da6e6ba` | `docs: add STRIPE_GROWTH_PRICE_ID to .env.example` |
+| `2f6d952` | `fix: lazy-initialize Stripe client to prevent build failure without env vars` |
+
+---
+
+### Overview
+
+Week 8 hardens PropelRFP for production. No new features — this week removes code quality violations (`console.error` in production code), adds loading skeleton UX for all dashboard routes, sets per-page metadata (browser tab titles), wires up Vercel Analytics for observability, fixes a Stripe client initialization bug that blocked CI builds without env vars, and documents the production deployment checklist. The design spec lives at `docs/superpowers/specs/2026-05-16-week8-uat-launch-design.md` and the implementation plan at `docs/superpowers/plans/2026-05-16-week8-uat-launch.md`.
+
+---
+
+### Changes by Category
+
+#### Console Violation Fixes
+
+| File | Change |
+|------|--------|
+| `src/app/(dashboard)/error.tsx` | Removed `useEffect` + `console.error`. Error boundary now shows the Next.js digest ID to the user instead of logging to console. |
+| `src/app/api/cron/process-kb/route.ts` | Removed 2 `console.error` calls. On failure the loop simply `break`s. |
+| `src/app/api/kb/process/route.ts` | Removed 2 `console.error` calls. On RPC error returns structured `fail()`. On doc processing failure now returns `{ processed: null }` (was incorrectly returning `{ processed: doc.id }` — a false-positive bug). |
+
+---
+
+#### Loading Skeletons (new files)
+
+| File | What it shows |
+|------|---------------|
+| `src/app/(dashboard)/loading.tsx` | 4 stat cards + 5-row list (mirrors dashboard page) |
+| `src/app/(dashboard)/kb/loading.tsx` | Heading + progress bar + upload zone + 4 doc rows |
+| `src/app/(dashboard)/projects/loading.tsx` | Heading + button + 6 project rows |
+| `src/app/(dashboard)/projects/[id]/loading.tsx` | Sidebar + editor two-column layout |
+| `src/app/(dashboard)/settings/billing/loading.tsx` | 3 usage cards + 3 plan tile placeholders |
+
+All use Tailwind `animate-pulse` on `bg-gray-200` divs. No new dependencies.
+
+---
+
+#### Page Metadata
+
+| File | Change |
+|------|--------|
+| `src/app/layout.tsx` | Changed `metadata.title` from a flat string to `{ default: "PropelRFP — ...", template: "%s | PropelRFP" }` |
+| `src/app/(dashboard)/dashboard/page.tsx` | Added `export const metadata: Metadata = { title: "Dashboard" }` |
+| `src/app/(dashboard)/kb/page.tsx` | Added `export const metadata: Metadata = { title: "Knowledge Base" }` |
+| `src/app/(dashboard)/projects/page.tsx` | Added `export const metadata: Metadata = { title: "Proposals" }` |
+| `src/app/(dashboard)/settings/billing/page.tsx` | Added `export const metadata: Metadata = { title: "Billing" }` |
+
+---
+
+#### Vercel Analytics
+
+| File | Change |
+|------|--------|
+| `package.json` | Added `@vercel/analytics` dependency |
+| `src/app/layout.tsx` | Added `<Analytics />` from `@vercel/analytics/react` in body |
+
+---
+
+#### Stripe Client Fix
+
+| File | Change |
+|------|--------|
+| `src/lib/stripe/client.ts` | Changed from top-level `new Stripe(...)` to lazy `getStripe()` function. Prevents build-time crash when `STRIPE_SECRET_KEY` is unset (CI environments). |
+| `src/lib/stripe/webhooks.ts` | Updated to use `getStripe()` instead of imported `stripe` instance |
+| `src/app/api/billing/checkout/route.ts` | Updated to use `getStripe()` |
+| `src/app/api/billing/portal/route.ts` | Updated to use `getStripe()` |
+
+---
+
+#### Env Example
+
+| File | Change |
+|------|--------|
+| `.env.example` | Added `STRIPE_GROWTH_PRICE_ID=price_...` (introduced in Week 7, was missing) |
+
+---
+
+### Security Audit (verified)
+
+- All AI keys (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`) server-side only — zero matches in `"use client"` files.
+- `SUPABASE_SERVICE_ROLE_KEY` only in `src/lib/supabase/server.ts` and `src/app/api/kb/process/route.ts`.
+- Stripe webhook validates signature via `stripe.webhooks.constructEvent` before processing.
+- Cron route validates `CRON_SECRET` bearer token as first operation.
+- `.gitignore` includes `.env.local`.
+- `.env.example` contains only placeholder values.
+
+---
+
+---
+
 ## [Week 7 — Billing & Limits] 2026-05-16
 
 **Branch:** `feature/week7-billing-limits`
