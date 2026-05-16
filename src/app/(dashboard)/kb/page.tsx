@@ -1,10 +1,13 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
+import type { Metadata } from "next";
 import { createClient } from "@/lib/supabase/server";
 import { PLAN_LIMITS } from "@/types";
 import type { Plan } from "@/types";
 import { UsageMeter } from "./UsageMeter";
 import { KbClient } from "./KbClient";
+
+export const metadata: Metadata = { title: "Knowledge Base" };
 
 export default async function KbPage() {
   const supabase = await createClient();

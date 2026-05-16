@@ -1,11 +1,14 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
+import type { Metadata } from "next";
 import { createClient } from "@/lib/supabase/server";
 import { PLAN_LIMITS } from "@/types";
 import type { Plan } from "@/types";
 import { UsageCards } from "./UsageCards";
 import { PlanTiles } from "./PlanTiles";
 import { CheckoutFeedback } from "./CheckoutFeedback";
+
+export const metadata: Metadata = { title: "Billing" };
 
 export default async function BillingPage() {
   const supabase = await createClient();

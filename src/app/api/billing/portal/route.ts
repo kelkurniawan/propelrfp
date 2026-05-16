@@ -1,6 +1,6 @@
 import { withErrorHandling, ok, fail } from "@/lib/api";
 import { requireRole } from "@/lib/auth/requireRole";
-import { stripe } from "@/lib/stripe/client";
+import { getStripe } from "@/lib/stripe/client";
 import { createServiceClient } from "@/lib/supabase/server";
 
 export const POST = withErrorHandling(async () => {
@@ -17,7 +17,7 @@ export const POST = withErrorHandling(async () => {
     return fail("not_found", "No billing account found. Subscribe to a plan first.", 404);
   }
 
-  const session = await stripe.billingPortal.sessions.create({
+  const session = await getStripe().billingPortal.sessions.create({
     customer: sub.stripe_customer_id,
     return_url: `${process.env.NEXT_PUBLIC_APP_URL}/settings/billing`,
   });

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
+import { Analytics } from "@vercel/analytics/react";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,7 +15,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PropelRFP — Win more contracts, faster.",
+  title: {
+    default: "PropelRFP — Win more contracts, faster.",
+    template: "%s | PropelRFP",
+  },
   description: "AI-powered RFP proposal automation grounded in your company's own winning history.",
 };
 
@@ -28,6 +32,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         {children}
         <Toaster richColors />
+        <Analytics />
       </body>
     </html>
   );
