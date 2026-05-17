@@ -2,7 +2,7 @@ import { z } from "zod";
 import { INDUSTRIES } from "@/types";
 
 export const orgUpdateSchema = z.object({
-  name: z.string().min(1, "Name is required").max(100),
+  name: z.string().trim().min(1, "Name is required").max(100),
   industry: z.enum(INDUSTRIES as readonly [string, ...string[]]),
   website: z
     .string()
@@ -14,7 +14,7 @@ export const orgUpdateSchema = z.object({
 export type OrgUpdateInput = z.infer<typeof orgUpdateSchema>;
 
 export const inviteCreateSchema = z.object({
-  email: z.string().email("Invalid email"),
+  email: z.string().trim().email("Invalid email").max(254),
   role: z.enum(["admin", "member"]),
 });
 export type InviteCreateInput = z.infer<typeof inviteCreateSchema>;
