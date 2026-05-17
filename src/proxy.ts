@@ -1,7 +1,11 @@
-import { type NextRequest } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import { updateSession } from "@/lib/supabase/middleware";
 
 export async function proxy(request: NextRequest) {
+  // Answer CORS preflight instantly — no auth needed
+  if (request.method === "OPTIONS") {
+    return new NextResponse(null, { status: 204 });
+  }
   return updateSession(request);
 }
 
