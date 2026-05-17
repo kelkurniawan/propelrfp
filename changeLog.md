@@ -5,6 +5,120 @@ Format: `[Week N — Phase] Date` → grouped by file, with what changed and why
 
 ---
 
+## [Week 8 — Security Hardening] 2026-05-17
+
+**Branch:** `feature/security-hardening`
+**Build status:** `pnpm build` clean. Merged to `develop`.
+
+**Commits (oldest → newest):**
+
+| SHA       | Message |
+| --------- | ------- |
+| `94e79d5` | `fix: add .trim() to all user-facing text schemas and enforce client_name min(1)` |
+| `b685c51` | `feat: add CORS domain lockdown and security headers to all API routes` |
+| `ee5e572` | `feat: add distributed rate limiting on auth, AI, and API routes via Upstash` |
+| `9214e2e` | `feat: add custom 404 and root error boundary pages` |
+| `d6eff3e` | `feat: integrate Sentry for error monitoring and alerting` |
+| `41d97b1` | `docs: add database rollback scripts for migrations 003-006` |
+| `46e2325` | `docs: add comprehensive error handling and rollback reference (errorhandler.md)` |
+
+---
+
+### Overview
+
+Post-UAT security hardening sprint. 9 gaps addressed: RLS/UUID isolation confirmed solid (no code change needed), password reset expiry confirmed correct (Supabase dashboard config), input sanitization added across all Zod schemas, CORS headers + security headers locked to the app's own domain, distributed rate limiting via Upstash Redis (Vercel KV), custom 404 and error boundary pages, Sentry monitoring with alert rules, DB rollback SQL scripts for migrations 003-006, and a comprehensive `docs/errorhandler.md` covering all error codes, rate limit headers, UI screens, and the Vercel rollback procedure.
+
+Design spec: `docs/superpowers/specs/2026-05-17-security-hardening-design.md`
+Implementation plan: `docs/superpowers/plans/2026-05-17-security-hardening.md`
+
+**New runtime dependencies:** `@upstash/ratelimit`, `@upstash/redis`, `@sentry/nextjs`
+
+---
+
+### Changes by Category
+
+#### Input Sanitization
+
+| File | Change |
+|------|--------|
+| `src/lib/schemas/auth.ts` | Added `.trim()` to `email` and `full_name` fields in all schemas. Added `.max(254)` to email fields. `signupBodySchema` create-org name and industry now trimmed. |
+| `src/lib/schemas/projects.ts` | Added `.trim()` to all free-text fields. Fixed `client_name` — added `.min(1)` so whitespace-only strings are rejected. `detectSectionsBodySchema.rfp_text` now trimmed. |
+| `src/lib/schemas/org.ts` | Added `.trim()` to `orgUpdateSchema.name` and `inviteCreateSchema.email`. Added `.max(254)` to email. |
+| `src/lib/schemas/kb.ts` | Added `.trim()` to `name`, `docId`, `path`, and `query` fields across all three KB schemas. |
+
+---
+
+#### CORS + Security Headers
+
+| File | Change |
+|------|--------|
+| `next.config.ts` | Added `headers()` config: `Access-Control-Allow-Origin` locked to `NEXT_PUBLIC_APP_URL`, plus `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` on all `/api/*` routes. Wrapped with `withSentryConfig`. |
+| `src/proxy.ts` | Added OPTIONS preflight short-circuit (returns `204` immediately — no auth needed). |
+
+---
+
+#### Rate Limiting
+
+| File | Change |
+|------|--------|
+| `src/lib/rate-limit.ts` | New file. Lazy Redis singleton + three `Ratelimit` instances: `authLimiter` (10/min), `genLimiter` (20/min), `apiLimiter` (100/min). |
+| `src/proxy.ts` | Applies the correct limiter based on route prefix (`/api/auth/`, `/generate`, everything else). Returns `429` with `X-RateLimit-*` and `Retry-After` headers on breach. |
+| `.env.example` | Added `KV_REST_API_URL` and `KV_REST_API_TOKEN` (Upstash/Vercel KV). |
+
+---
+
+#### Custom Error Pages (new files)
+
+| File | What it shows |
+|------|---------------|
+| `src/app/not-found.tsx` | Global 404 — "Page not found" with links to Dashboard and Home. |
+| `src/app/(dashboard)/not-found.tsx` | Dashboard-scoped 404 — shown for `/projects/fake-id` etc. |
+| `src/app/error.tsx` | Root error boundary — shows digest reference code, "Try again" + "Go home" buttons. |
+
+---
+
+#### Sentry Monitoring
+
+| File | Change |
+|------|--------|
+| `sentry.client.config.ts` | Browser Sentry init — production only, 10% trace sampling, ignores network errors. |
+| `sentry.server.config.ts` | Server Sentry init — production only, 10% trace sampling. |
+| `sentry.edge.config.ts` | Edge runtime Sentry init — production only, traces disabled. |
+| `next.config.ts` | Wrapped with `withSentryConfig` for source maps and build-time upload. |
+| `.env.example` | Added `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_DSN`, `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT`. |
+
+Manual step required: create two alert rules in Sentry dashboard (documented in `docs/errorhandler.md`).
+
+---
+
+#### DB Rollback Scripts (new files)
+
+| File | Undoes |
+|------|--------|
+| `supabase/migrations/rollback/006_rollback.sql` | Removes `free` from plan constraint, reverts default to `starter` |
+| `supabase/migrations/rollback/005_rollback.sql` | Drops `increment_proposals_if_under_limit()` function |
+| `supabase/migrations/rollback/004_rollback.sql` | Drops `rfp_raw_text` column from `rfp_projects` |
+| `supabase/migrations/rollback/003_rollback.sql` | Drops `doc_chunks`, `knowledge_docs`, and related functions (destructive — use only in emergency) |
+
+---
+
+#### Documentation
+
+| File | Change |
+|------|--------|
+| `docs/errorhandler.md` | New file. Full error handling reference: all API error codes, rate limit headers, UI error screens, quota exceeded flow, Sentry integration details, alert rule setup, Vercel rollback procedure, git revert path. |
+
+---
+
+### Security Audit (confirmed this sprint)
+
+- RLS + UUID isolation: `current_org_id()` is `SECURITY DEFINER`, reads from Supabase JWT — cross-org access impossible at the DB layer.
+- Service role (`SUPABASE_SERVICE_ROLE_KEY`) only used in KB processing cron and billing webhook — both legitimate and auth-guarded.
+- Password reset: Supabase Auth controls token TTL (set to 1h in dashboard). `redirectTo` URL is whitelisted.
+- DB indexes: all hot-path queries (`doc_chunks_embedding_idx`, project/section lookups by `org_id`) were already indexed — no changes needed.
+
+---
+
 ## [Week 8 — UAT & Launch] 2026-05-16
 
 **Branch:** `feature/week8-launch`
